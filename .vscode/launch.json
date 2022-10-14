@@ -21,13 +21,16 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug executable 'khodol'",
+      "name": "Debug executable 'example_app'",
       "cargo": {
-        "args": ["build", "--bin=khodol", "--package=khodol"],
+        "args": ["build", "--bin=example_app", "--package=khodol"],
         "filter": {
-          "name": "khodol",
+          "name": "example_app",
           "kind": "bin"
         }
+      },
+      "env": {
+        "RUST_LOG": "TRACE"
       },
       "args": [],
       "cwd": "${workspaceFolder}"
@@ -35,11 +38,11 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug unit tests in executable 'khodol'",
+      "name": "Debug unit tests in executable 'example_app'",
       "cargo": {
-        "args": ["test", "--no-run", "--bin=khodol", "--package=khodol"],
+        "args": ["test", "--no-run", "--bin=example_app", "--package=khodol"],
         "filter": {
-          "name": "khodol",
+          "name": "example_app",
           "kind": "bin"
         }
       },
