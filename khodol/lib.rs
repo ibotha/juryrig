@@ -47,3 +47,11 @@ pub fn init_window(name: &str) {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_a() {
+        assert_eq!(1, 1);
+    }
+}
