@@ -19,6 +19,7 @@ fn main() {
                         }
                     }
                     Event::DeviceEvent { device_id: _device_id, event } => {
+                        info!("Id: {:?}", _device_id);
                         match event {
                             DeviceEvent::Key(input) => {
                                 // info!("Key Event {:?}", input.virtual_keycode.unwrap());
@@ -32,6 +33,10 @@ fn main() {
                     Event::Resumed => {
                         //TODO: Initialise graphics context
                         info!("Ready to init graphics");
+                        control_flow.set_wait()
+                    }
+                    Event::LoopDestroyed => {
+                        // TODO: Destroy everything here
                         control_flow.set_wait()
                     }
                     _ => {
