@@ -18,5 +18,5 @@ path = "example_app/main.rs"
 [dependencies]
 log = "0.4"
 pretty_env_logger = "0.4"
-ash = "0.37"
+ash = "0.37.*"
 winit = "0.28"
