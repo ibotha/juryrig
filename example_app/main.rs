@@ -12,7 +12,6 @@ fn main() {
     pretty_env_logger::init_custom_env("KHODOL_LOG_LEVEL");
 
     info!("Logs initialised.");
-    let mut vulkan: Option<Vulkan> = None;
     let event_loop = EventLoop::new();
 
     match WindowBuilder::new()
@@ -21,6 +20,8 @@ fn main() {
         .build(&event_loop)
     {
         Ok(window) => {
+            let cached_window_id = window.id();
+            let vulkan = Vulkan::new(window).expect("Could not init vulkan!");
             event_loop.run(move |event, _, control_flow| {
                 control_flow.set_poll();
                 match event {
@@ -28,7 +29,7 @@ fn main() {
                         window_id,
                         event: WindowEvent::CloseRequested,
                     } => {
-                        if window.id() == window_id {
+                        if cached_window_id == window_id {
                             control_flow.set_exit()
                         }
                     }
@@ -49,26 +50,21 @@ fn main() {
                             _ => {}
                         }
                     }
+
                     Event::Resumed => {
                         //TODO: Initialise graphics context
-                        info!("Ready to init graphics");
-                        match Vulkan::new(&window) {
-                            Ok(v) => {
-                                vulkan = Some(v);
-                            }
-                            Err(e) => {
-                                error!("Failed to initialise vulkan {:?}", e);
-                                panic!("Could not initialise vulkan!");
-                            }
-                        }
+                        info!("Event-Startup");
                     }
                     Event::LoopDestroyed => {
                         // TODO: Destroy everything here
-                        info!("Ready to destroy graphics");
-                        vulkan.as_mut().unwrap().destroy();
+                        info!("Event-End");
                     }
                     Event::MainEventsCleared => {
-                        // Draw Calls go here
+                        // Event processing happens here
+                        vulkan.window.request_redraw();
+                    }
+                    Event::RedrawRequested(_) => {
+                        // Render Goes here!
                     }
                     _ => {}
                 }
