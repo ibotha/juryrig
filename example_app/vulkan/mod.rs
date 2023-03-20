@@ -567,7 +567,7 @@ impl Vulkan {
         extension_name_pointers.push(Win32Surface::name().as_ptr());
 
         #[cfg(target_family = "unix")]
-        extension_name_pointers.push(XLibSurface::name().as_ptr());
+        extension_name_pointers.push(XlibSurface::name().as_ptr());
         return extension_name_pointers;
     }
 
