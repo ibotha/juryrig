@@ -10,7 +10,7 @@ use winit::window::Window;
 use {ash::extensions::khr::Win32Surface, winit::platform::windows::WindowExtWindows};
 
 #[cfg(target_family = "unix")]
-use {ash::extensions::khr::XlibSurface, winit::platform::unix::WindowExtUnix};
+use {ash::extensions::khr::XlibSurface, winit::platform::x11::WindowExtX11};
 
 struct Debug {
     debug_utils: DebugUtils,
@@ -88,6 +88,7 @@ struct Surface {
 
 impl Surface {
     fn new(window: &Window, entry: &Entry, instance: &Instance) -> Result<Surface, vk::Result> {
+        #[cfg(target_family = "windows")]
         fn create_surface(
             window: &Window,
             entry: &Entry,
@@ -128,24 +129,47 @@ impl Surface {
         })
     }
 
-    fn get_physical_device_surface_support(&self, physical_device: vk::PhysicalDevice, queue_family_index: u32) -> Result<bool, vk::Result> {
-        unsafe { self.loader.get_physical_device_surface_support(physical_device, queue_family_index, self.surface) }
-    }
-
-    pub(crate) fn get_capabilities(&self, physical_device: vk::PhysicalDevice) -> std::result::Result<vk::SurfaceCapabilitiesKHR, ash::vk::Result> {
+    fn get_physical_device_surface_support(
+        &self,
+        physical_device: vk::PhysicalDevice,
+        queue_family_index: u32,
+    ) -> Result<bool, vk::Result> {
         unsafe {
-            self.loader.get_physical_device_surface_capabilities(physical_device, self.surface)}
-    }
-
-    pub(crate) fn get_present_modes(&self, physical_device: vk::PhysicalDevice) -> std::result::Result<Vec<vk::PresentModeKHR>, ash::vk::Result> {
-        unsafe {
-            self.loader.get_physical_device_surface_present_modes(physical_device, self.surface)
+            self.loader.get_physical_device_surface_support(
+                physical_device,
+                queue_family_index,
+                self.surface,
+            )
         }
     }
 
-    pub(crate) fn get_formats(&self, physical_device: vk::PhysicalDevice) -> Result<Vec<vk::SurfaceFormatKHR>, vk::Result> {
+    pub(crate) fn get_capabilities(
+        &self,
+        physical_device: vk::PhysicalDevice,
+    ) -> std::result::Result<vk::SurfaceCapabilitiesKHR, ash::vk::Result> {
         unsafe {
-            self.loader.get_physical_device_surface_formats(physical_device, self.surface)
+            self.loader
+                .get_physical_device_surface_capabilities(physical_device, self.surface)
+        }
+    }
+
+    pub(crate) fn get_present_modes(
+        &self,
+        physical_device: vk::PhysicalDevice,
+    ) -> std::result::Result<Vec<vk::PresentModeKHR>, ash::vk::Result> {
+        unsafe {
+            self.loader
+                .get_physical_device_surface_present_modes(physical_device, self.surface)
+        }
+    }
+
+    pub(crate) fn get_formats(
+        &self,
+        physical_device: vk::PhysicalDevice,
+    ) -> Result<Vec<vk::SurfaceFormatKHR>, vk::Result> {
+        unsafe {
+            self.loader
+                .get_physical_device_surface_formats(physical_device, self.surface)
         }
     }
 }
@@ -162,48 +186,52 @@ struct QueueFamilies {
 }
 
 impl QueueFamilies {
-    fn new(instance: &Instance, physical_device: vk::PhysicalDevice, surface: &Surface) -> Result<QueueFamilies, vk::Result> {
+    fn new(
+        instance: &Instance,
+        physical_device: vk::PhysicalDevice,
+        surface: &Surface,
+    ) -> Result<QueueFamilies, vk::Result> {
         let queuefamilyproperties =
             unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
 
-            let mut found_graphics_q_index = None;
-            let mut found_transfer_q_index = None;
-            let mut transfer_queue_specialization = 32;
-            for (index, qfam) in queuefamilyproperties.iter().enumerate() {
-                // TODO: Consider cases where the queue for dealing with a surface is different
-                // from the queue that draws graphics
-                if qfam.queue_count > 0
-                    && qfam.queue_flags.contains(vk::QueueFlags::GRAPHICS)
-                    && surface.get_physical_device_surface_support(physical_device, index as u32)?
-                {
-                    found_graphics_q_index = Some(index as u32);
-                }
-                if qfam.queue_count > 0
-                    && qfam.queue_flags.intersects(
-                        vk::QueueFlags::TRANSFER | vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE,
-                    )
-                {
-                    let mut raw_queue_flags =
-                        qfam.queue_flags.as_raw() & !vk::QueueFlags::TRANSFER.as_raw();
-                    let mut current_queue_specialisation = 0;
+        let mut found_graphics_q_index = None;
+        let mut found_transfer_q_index = None;
+        let mut transfer_queue_specialization = 32;
+        for (index, qfam) in queuefamilyproperties.iter().enumerate() {
+            // TODO: Consider cases where the queue for dealing with a surface is different
+            // from the queue that draws graphics
+            if qfam.queue_count > 0
+                && qfam.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+                && surface.get_physical_device_surface_support(physical_device, index as u32)?
+            {
+                found_graphics_q_index = Some(index as u32);
+            }
+            if qfam.queue_count > 0
+                && qfam.queue_flags.intersects(
+                    vk::QueueFlags::TRANSFER | vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE,
+                )
+            {
+                let mut raw_queue_flags =
+                    qfam.queue_flags.as_raw() & !vk::QueueFlags::TRANSFER.as_raw();
+                let mut current_queue_specialisation = 0;
 
-                    // We are trying to select the queue that is most specialized for the purpose of
-                    // transferring so we count how many flags are set other than the transfer flag
-                    while raw_queue_flags != 0 {
-                        raw_queue_flags &= raw_queue_flags - 1;
-                        current_queue_specialisation += 1;
-                    }
-
-                    // Choose a new family if we either don't already have one, are currently using the
-                    // same family as our graphics, or have found a more specialized queue
-                    if found_transfer_q_index.is_none()
-                        || found_transfer_q_index == found_graphics_q_index
-                        || (current_queue_specialisation < transfer_queue_specialization)
-                    {
-                        found_transfer_q_index = Some(index as u32);
-                        transfer_queue_specialization = current_queue_specialisation;
-                    }
+                // We are trying to select the queue that is most specialized for the purpose of
+                // transferring so we count how many flags are set other than the transfer flag
+                while raw_queue_flags != 0 {
+                    raw_queue_flags &= raw_queue_flags - 1;
+                    current_queue_specialisation += 1;
                 }
+
+                // Choose a new family if we either don't already have one, are currently using the
+                // same family as our graphics, or have found a more specialized queue
+                if found_transfer_q_index.is_none()
+                    || found_transfer_q_index == found_graphics_q_index
+                    || (current_queue_specialisation < transfer_queue_specialization)
+                {
+                    found_transfer_q_index = Some(index as u32);
+                    transfer_queue_specialization = current_queue_specialisation;
+                }
+            }
         }
 
         Ok(QueueFamilies {
@@ -213,23 +241,37 @@ impl QueueFamilies {
     }
 }
 
-struct Queues {
-    graphics: vk::Queue,
+pub struct Queues {
+    pub graphics: vk::Queue,
     transfer: vk::Queue,
 }
 
-struct Swapchain {
-    loader: khr::Swapchain,
-    swapchain: vk::SwapchainKHR,
-    image_views: Vec<vk::ImageView>
+pub struct Swapchain {
+    pub loader: khr::Swapchain,
+    pub swapchain: vk::SwapchainKHR,
+    image_views: Vec<vk::ImageView>,
+    frame_buffers: Vec<vk::Framebuffer>,
+    surface_format: vk::SurfaceFormatKHR,
+    extent: vk::Extent2D,
+    pub image_available: Vec<vk::Semaphore>,
+    pub rendering_finished: Vec<vk::Semaphore>,
+    pub may_begin_drawing: Vec<vk::Fence>,
+    pub amount_of_images: u32,
+    pub current_image: usize,
 }
 
 impl Swapchain {
-    fn init(instance: &Instance, physical_device: vk::PhysicalDevice, logical_device: &Device, surface: &Surface, queue_families: &QueueFamilies, queues: &Queues) -> Result<Swapchain, vk::Result> {
+    fn init(
+        instance: &Instance,
+        physical_device: vk::PhysicalDevice,
+        logical_device: &Device,
+        surface: &Surface,
+        queue_families: &QueueFamilies,
+    ) -> Result<Swapchain, vk::Result> {
         let surface_capabilities = surface.get_capabilities(physical_device)?;
+        let extent = surface_capabilities.current_extent;
         let surface_present_modes = surface.get_present_modes(physical_device)?;
-        let surface_formats = surface.get_formats(physical_device)?;
-        dbg!(&surface_formats.first());
+        let surface_format = *surface.get_formats(physical_device)?.first().unwrap();
         let queuefamilies = [queue_families.graphics_q_index.unwrap()];
 
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
@@ -238,8 +280,8 @@ impl Swapchain {
                 3.max(surface_capabilities.min_image_count)
                     .min(surface_capabilities.max_image_count),
             )
-            .image_format(vk::Format::R8G8B8A8_UNORM) //surface_formats.first().unwrap().format)
-            .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR) //surface_formats.first().unwrap().color_space)
+            .image_format(surface_format.format)
+            .image_color_space(surface_format.color_space)
             .image_extent(surface_capabilities.current_extent)
             .image_array_layers(1)
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
@@ -251,6 +293,7 @@ impl Swapchain {
         let swapchain_loader = khr::Swapchain::new(&instance, &logical_device);
         let swapchain = unsafe { swapchain_loader.create_swapchain(&swapchain_create_info, None)? };
         let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain)? };
+        let amount_of_images = swapchain_images.len() as u32;
         let mut image_views = Vec::with_capacity(swapchain_images.len());
 
         for image in &swapchain_images {
@@ -263,23 +306,231 @@ impl Swapchain {
             let imageview_create_info = vk::ImageViewCreateInfo::builder()
                 .image(*image)
                 .view_type(vk::ImageViewType::TYPE_2D)
-                .format(vk::Format::R8G8B8A8_UNORM)
+                .format(surface_format.format)
                 .subresource_range(*subresource_range);
 
             let imageview =
                 unsafe { logical_device.create_image_view(&imageview_create_info, None) }?;
 
             image_views.push(imageview);
-        };
-        Ok(Swapchain { loader: swapchain_loader, swapchain, image_views })
+        }
+        
+        let mut image_available = vec![];
+        let mut rendering_finished = vec![];
+        let mut may_begin_drawing = vec![];
+        let semaphoreinfo = vk::SemaphoreCreateInfo::builder();
+        let fenceinfo = vk::FenceCreateInfo::builder().flags(vk::FenceCreateFlags::SIGNALED);
+        for _ in 0..amount_of_images {
+            let semaphore_available =
+                unsafe { logical_device.create_semaphore(&semaphoreinfo, None) }?;
+            let semaphore_finished =
+                unsafe { logical_device.create_semaphore(&semaphoreinfo, None) }?;
+            image_available.push(semaphore_available);
+            rendering_finished.push(semaphore_finished);
+            let fence = unsafe { logical_device.create_fence(&fenceinfo, None) }?;
+            may_begin_drawing.push(fence);
+        }
+
+        Ok(Swapchain {
+            loader: swapchain_loader,
+            swapchain,
+            image_views,
+            extent,
+            surface_format,
+            frame_buffers: vec![],
+            amount_of_images,
+            image_available,
+            may_begin_drawing,
+            rendering_finished,
+            current_image:0
+        })
+    }
+
+    fn create_framebuffers(
+        &mut self,
+        logical_device: &ash::Device,
+        renderpass: vk::RenderPass,
+    ) -> Result<(), vk::Result> {
+        for iv in &self.image_views {
+            let iview = [*iv];
+            let framebuffer_info = vk::FramebufferCreateInfo::builder()
+                .render_pass(renderpass)
+                .attachments(&iview)
+                .width(self.extent.width)
+                .height(self.extent.height)
+                .layers(1);
+            let fb = unsafe { logical_device.create_framebuffer(&framebuffer_info, None) }?;
+            self.frame_buffers.push(fb);
+        }
+        Ok(())
     }
 
     unsafe fn cleanup(&self, logical_device: &Device) -> () {
-       for iv in &self.image_views {
+        for fence in &self.may_begin_drawing {
+            logical_device.destroy_fence(*fence, None);
+        }
+        for semaphore in &self.image_available {
+            logical_device.destroy_semaphore(*semaphore, None);
+        }
+        for semaphore in &self.rendering_finished {
+            logical_device.destroy_semaphore(*semaphore, None);
+        }
+        for fb in &self.frame_buffers {
+            logical_device.destroy_framebuffer(*fb, None);
+        }
+        for iv in &self.image_views {
             logical_device.destroy_image_view(*iv, None);
         }
-        self.loader
-            .destroy_swapchain(self.swapchain, None) 
+        self.loader.destroy_swapchain(self.swapchain, None)
+    }
+}
+
+struct Pipeline {
+    pipeline: vk::Pipeline,
+    layout: vk::PipelineLayout,
+}
+
+impl Pipeline {
+    fn cleanup(&self, logical_device: &ash::Device) {
+        unsafe {
+            logical_device.destroy_pipeline(self.pipeline, None);
+            logical_device.destroy_pipeline_layout(self.layout, None);
+        }
+    }
+
+    fn init(
+        logical_device: &ash::Device,
+        swapchain: &Swapchain,
+        renderpass: &vk::RenderPass,
+    ) -> Result<Pipeline, vk::Result> {
+        let vertexshader_createinfo = vk::ShaderModuleCreateInfo::builder().code(
+            vk_shader_macros::include_glsl!("./shaders/vertex.glsl", kind: vert),
+        );
+        let vertexshader_module =
+            unsafe { logical_device.create_shader_module(&vertexshader_createinfo, None)? };
+        let fragmentshader_createinfo = vk::ShaderModuleCreateInfo::builder().code(
+            vk_shader_macros::include_glsl!("./shaders/fragment.glsl", kind: frag),
+        );
+        let fragmentshader_module =
+            unsafe { logical_device.create_shader_module(&fragmentshader_createinfo, None)? };
+        let mainfunctionname = std::ffi::CString::new("main").unwrap();
+        let vertexshader_stage = vk::PipelineShaderStageCreateInfo::builder()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(vertexshader_module)
+            .name(&mainfunctionname);
+        let fragmentshader_stage = vk::PipelineShaderStageCreateInfo::builder()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(fragmentshader_module)
+            .name(&mainfunctionname);
+        let shader_stages = vec![vertexshader_stage.build(), fragmentshader_stage.build()];
+        let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder();
+        let input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
+            .topology(vk::PrimitiveTopology::POINT_LIST);
+        let viewports = [vk::Viewport {
+            x: 0.,
+            y: 0.,
+            width: swapchain.extent.width as f32,
+            height: swapchain.extent.height as f32,
+            min_depth: 0.,
+            max_depth: 1.,
+        }];
+        let scissors = [vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: swapchain.extent,
+        }];
+
+        let viewport_info = vk::PipelineViewportStateCreateInfo::builder()
+            .viewports(&viewports)
+            .scissors(&scissors);
+        let rasterizer_info = vk::PipelineRasterizationStateCreateInfo::builder()
+            .line_width(1.0)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .polygon_mode(vk::PolygonMode::FILL);
+        let multisampler_info = vk::PipelineMultisampleStateCreateInfo::builder()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        let colourblend_attachments = [vk::PipelineColorBlendAttachmentState::builder()
+            .blend_enable(true)
+            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(vk::BlendFactor::SRC_ALPHA)
+            .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+            .alpha_blend_op(vk::BlendOp::ADD)
+            .color_write_mask(
+                vk::ColorComponentFlags::R
+                    | vk::ColorComponentFlags::G
+                    | vk::ColorComponentFlags::B
+                    | vk::ColorComponentFlags::A,
+            )
+            .build()];
+        let colourblend_info =
+            vk::PipelineColorBlendStateCreateInfo::builder().attachments(&colourblend_attachments);
+        let pipelinelayout_info = vk::PipelineLayoutCreateInfo::builder();
+        let pipelinelayout =
+            unsafe { logical_device.create_pipeline_layout(&pipelinelayout_info, None) }?;
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
+            .stages(&shader_stages)
+            .vertex_input_state(&vertex_input_info)
+            .input_assembly_state(&input_assembly_info)
+            .viewport_state(&viewport_info)
+            .rasterization_state(&rasterizer_info)
+            .multisample_state(&multisampler_info)
+            .color_blend_state(&colourblend_info)
+            .layout(pipelinelayout)
+            .render_pass(*renderpass)
+            .subpass(0);
+        let graphicspipeline = unsafe {
+            logical_device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    &[pipeline_info.build()],
+                    None,
+                )
+                .expect("A problem with the pipeline creation")
+        }[0];
+        unsafe {
+            logical_device.destroy_shader_module(fragmentshader_module, None);
+            logical_device.destroy_shader_module(vertexshader_module, None);
+        }
+        Ok(Pipeline {
+            pipeline: graphicspipeline,
+            layout: pipelinelayout,
+        })
+    }
+}
+
+struct Pools {
+    commandpool_graphics: vk::CommandPool,
+    commandpool_transfer: vk::CommandPool,
+}
+
+impl Pools {
+    fn init(
+        logical_device: &ash::Device,
+        queue_families: &QueueFamilies,
+    ) -> Result<Pools, vk::Result> {
+        let graphics_commandpool_info = vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(queue_families.graphics_q_index.unwrap())
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+        let commandpool_graphics =
+            unsafe { logical_device.create_command_pool(&graphics_commandpool_info, None) }?;
+        let transfer_commandpool_info = vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(queue_families.transfer_q_index.unwrap())
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+        let commandpool_transfer =
+            unsafe { logical_device.create_command_pool(&transfer_commandpool_info, None) }?;
+
+        Ok(Pools {
+            commandpool_graphics,
+            commandpool_transfer,
+        })
+    }
+    fn cleanup(&self, logical_device: &ash::Device) {
+        unsafe {
+            logical_device.destroy_command_pool(self.commandpool_graphics, None);
+            logical_device.destroy_command_pool(self.commandpool_transfer, None);
+        }
     }
 }
 
@@ -290,9 +541,13 @@ pub struct Vulkan {
     debug: std::mem::ManuallyDrop<Debug>,
     surface: std::mem::ManuallyDrop<Surface>,
     queue_families: QueueFamilies,
-    logical_device: Device,
-    queues: Queues,
-    swapchain: Swapchain
+    pub logical_device: Device,
+    pub queues: Queues,
+    pub swapchain: Swapchain,
+    renderpass: vk::RenderPass,
+    graphics_pipeline: Pipeline,
+    command_buffer_pools: Pools,
+    pub command_buffers: Vec<vk::CommandBuffer>
 }
 
 impl Vulkan {
@@ -336,25 +591,47 @@ impl Vulkan {
         let (logical_device, queues) =
             Vulkan::init_device_and_queues(&instance, physical_device, &queue_families)?;
 
-        let swapchain = Swapchain::init(
-        &instance,
-        physical_device,
-        &logical_device,
-        &surface,
-        &queue_families,
-        &queues,
-    )?;
-        
+        let mut swapchain = Swapchain::init(
+            &instance,
+            physical_device,
+            &logical_device,
+            &surface,
+            &queue_families,
+        )?;
+
+        let renderpass = Self::init_renderpass(&logical_device, swapchain.surface_format)?;
+
+        swapchain.create_framebuffers(&logical_device, renderpass)?;
+
+        let graphics_pipeline = Pipeline::init(&logical_device, &swapchain, &renderpass)?;
+
+        let pools = Pools::init(&logical_device, &queue_families)?;
+
+        let command_buffers =
+            Self::create_commandbuffers(&logical_device, &pools, swapchain.frame_buffers.len())?;
+
+        Self::fill_command_buffers(
+            &logical_device,
+            &command_buffers,
+            &graphics_pipeline,
+            &renderpass,
+            &swapchain,
+        )?;
+
         Ok(Self {
             instance,
             entry,
+            window,
             debug: std::mem::ManuallyDrop::new(debug),
             surface: std::mem::ManuallyDrop::new(surface),
             queue_families,
             logical_device,
             queues,
             swapchain,
-            window
+            renderpass,
+            graphics_pipeline,
+            command_buffer_pools: pools,
+            command_buffers
         })
     }
 
@@ -439,7 +716,11 @@ impl Vulkan {
         Ok(chosen.unwrap())
     }
 
-    fn init_device_and_queues(instance: &Instance, physical_device: vk::PhysicalDevice, queue_families: &QueueFamilies) -> Result<(Device, Queues), vk::Result> {
+    fn init_device_and_queues(
+        instance: &Instance,
+        physical_device: vk::PhysicalDevice,
+        queue_families: &QueueFamilies,
+    ) -> Result<(Device, Queues), vk::Result> {
         let layer_name_pointers = Vulkan::layer_name_pointers();
 
         let device_extension_name_pointers: Vec<*const i8> = vec![khr::Swapchain::name().as_ptr()];
@@ -470,7 +751,107 @@ impl Vulkan {
         let transfer_queue =
             unsafe { logical_device.get_device_queue(queue_families.transfer_q_index.unwrap(), 0) };
 
-        Ok((logical_device, Queues { graphics: graphics_queue, transfer: transfer_queue }))
+        Ok((
+            logical_device,
+            Queues {
+                graphics: graphics_queue,
+                transfer: transfer_queue,
+            },
+        ))
+    }
+
+    fn init_renderpass(
+        logical_device: &ash::Device,
+        format: vk::SurfaceFormatKHR,
+    ) -> Result<vk::RenderPass, vk::Result> {
+        let attachments = [vk::AttachmentDescription::builder()
+            .format(format.format)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .build()];
+        let color_attachment_references = [vk::AttachmentReference {
+            attachment: 0,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        }];
+        let subpasses = [vk::SubpassDescription::builder()
+            .color_attachments(&color_attachment_references)
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+            .build()];
+        let subpass_dependencies = [vk::SubpassDependency::builder()
+            .src_subpass(vk::SUBPASS_EXTERNAL)
+            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .dst_subpass(0)
+            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+            .dst_access_mask(
+                vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            )
+            .build()];
+        let renderpass_info = vk::RenderPassCreateInfo::builder()
+            .attachments(&attachments)
+            .subpasses(&subpasses)
+            .dependencies(&subpass_dependencies);
+        let renderpass = unsafe { logical_device.create_render_pass(&renderpass_info, None)? };
+        Ok(renderpass)
+    }
+
+    fn create_commandbuffers(
+        logical_device: &ash::Device,
+        pools: &Pools,
+        amount: usize,
+    ) -> Result<Vec<vk::CommandBuffer>, vk::Result> {
+        let commandbuf_allocate_info = vk::CommandBufferAllocateInfo::builder()
+            .command_pool(pools.commandpool_graphics)
+            .command_buffer_count(amount as u32);
+        unsafe { logical_device.allocate_command_buffers(&commandbuf_allocate_info) }
+    }
+
+    fn fill_command_buffers(
+        logical_device: &Device,
+        command_buffers: &Vec<vk::CommandBuffer>,
+        graphics_pipeline: &Pipeline,
+        renderpass: &vk::RenderPass,
+        swapchain: &Swapchain,
+    ) -> Result<(), vk::Result> {
+        for (i, &commandbuffer) in command_buffers.iter().enumerate() {
+            let commandbuffer_begininfo = vk::CommandBufferBeginInfo::builder();
+            unsafe {
+                logical_device.begin_command_buffer(commandbuffer, &commandbuffer_begininfo)?;
+            }
+            let clearvalues = [vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.1, 0.2, 0.2, 1.0],
+                },
+            }];
+            let renderpass_begininfo = vk::RenderPassBeginInfo::builder()
+                .render_pass(*renderpass)
+                .framebuffer(swapchain.frame_buffers[i])
+                .render_area(vk::Rect2D {
+                    offset: vk::Offset2D { x: 0, y: 0 },
+                    extent: swapchain.extent,
+                })
+                .clear_values(&clearvalues);
+            unsafe {
+                logical_device.cmd_begin_render_pass(
+                    commandbuffer,
+                    &renderpass_begininfo,
+                    vk::SubpassContents::INLINE,
+                );
+                logical_device.cmd_bind_pipeline(
+                    commandbuffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    graphics_pipeline.pipeline,
+                );
+                logical_device.cmd_draw(commandbuffer, 1, 1, 0, 0);
+                logical_device.cmd_end_render_pass(commandbuffer);
+                logical_device.end_command_buffer(commandbuffer)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -478,6 +859,13 @@ impl Drop for Vulkan {
     fn drop(&mut self) {
         info!("Destroying vulkan");
         unsafe {
+            self.logical_device
+                .device_wait_idle()
+                .expect("something wrong while waiting");
+            self.command_buffer_pools.cleanup(&self.logical_device);
+            self.graphics_pipeline.cleanup(&self.logical_device);
+            self.logical_device
+                .destroy_render_pass(self.renderpass, None);
             self.swapchain.cleanup(&self.logical_device);
             self.logical_device.destroy_device(None);
             std::mem::ManuallyDrop::drop(&mut self.surface);

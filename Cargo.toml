@@ -16,6 +16,7 @@ name = "example_app"
 path = "example_app/main.rs"
 
 [dependencies]
+vk-shader-macros = "0.2.8"
 log = "0.4"
 pretty_env_logger = "0.4"
 ash = "0.37.*"

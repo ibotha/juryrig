@@ -3,7 +3,7 @@ mod vulkan;
 use winit::{
     event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent},
     event_loop::EventLoop,
-    window::{WindowBuilder, Fullscreen},
+    window::{Fullscreen, WindowBuilder},
 };
 
 use crate::vulkan::Vulkan;
@@ -21,7 +21,7 @@ fn main() {
     {
         Ok(window) => {
             let cached_window_id = window.id();
-            let vulkan = Vulkan::new(window).expect("Could not init vulkan!");
+            let mut vulkan = Vulkan::new(window).expect("Could not init vulkan!");
             event_loop.run(move |event, _, control_flow| {
                 control_flow.set_poll();
                 match event {
@@ -64,7 +64,74 @@ fn main() {
                         vulkan.window.request_redraw();
                     }
                     Event::RedrawRequested(_) => {
-                        // Render Goes here!
+                        vulkan.swapchain.current_image = (vulkan.swapchain.current_image + 1)
+                            % vulkan.swapchain.amount_of_images as usize;
+                        let (image_index, _) = unsafe {
+                            vulkan
+                                .swapchain
+                                .loader
+                                .acquire_next_image(
+                                    vulkan.swapchain.swapchain,
+                                    std::u64::MAX,
+                                    vulkan.swapchain.image_available
+                                        [vulkan.swapchain.current_image],
+                                    ash::vk::Fence::null(),
+                                )
+                                .expect("image acquisition trouble")
+                        };
+                        unsafe {
+                            vulkan
+                                .logical_device
+                                .wait_for_fences(
+                                    &[vulkan.swapchain.may_begin_drawing
+                                        [vulkan.swapchain.current_image]],
+                                    true,
+                                    std::u64::MAX,
+                                )
+                                .expect("fence-waiting");
+
+                            vulkan
+                                .logical_device
+                                .reset_fences(&[vulkan.swapchain.may_begin_drawing
+                                    [vulkan.swapchain.current_image]])
+                                .expect("resetting fences");
+                        }
+                        let semaphores_available =
+                            [vulkan.swapchain.image_available[vulkan.swapchain.current_image]];
+                        let waiting_stages = [ash::vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
+                        let semaphores_finished =
+                            [vulkan.swapchain.rendering_finished[vulkan.swapchain.current_image]];
+                        let commandbuffers = [vulkan.command_buffers[image_index as usize]];
+                        let submit_info = [ash::vk::SubmitInfo::builder()
+                            .wait_semaphores(&semaphores_available)
+                            .wait_dst_stage_mask(&waiting_stages)
+                            .command_buffers(&commandbuffers)
+                            .signal_semaphores(&semaphores_finished)
+                            .build()];
+                        unsafe {
+                            vulkan
+                                .logical_device
+                                .queue_submit(
+                                    vulkan.queues.graphics,
+                                    &submit_info,
+                                    vulkan.swapchain.may_begin_drawing
+                                        [vulkan.swapchain.current_image],
+                                )
+                                .expect("queue submission");
+                        };
+                        let swapchains = [vulkan.swapchain.swapchain];
+                        let indices = [image_index];
+                        let present_info = ash::vk::PresentInfoKHR::builder()
+                            .wait_semaphores(&semaphores_finished)
+                            .swapchains(&swapchains)
+                            .image_indices(&indices);
+                        unsafe {
+                            vulkan
+                                .swapchain
+                                .loader
+                                .queue_present(vulkan.queues.graphics, &present_info)
+                                .expect("queue presentation");
+                        };
                     }
                     _ => {}
                 }
