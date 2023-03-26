@@ -640,7 +640,7 @@ impl Vulkan {
         window: &Window,
         debug_create_info: &mut vk::DebugUtilsMessengerCreateInfoEXTBuilder,
     ) -> std::result::Result<Instance, vk::Result> {
-        let engine_name: CString = CString::new("Khodol").unwrap();
+        let engine_name: CString = CString::new("Juryrig").unwrap();
         let app_name: CString = CString::new(window.title().to_owned()).unwrap();
 
         // Layers and extentions

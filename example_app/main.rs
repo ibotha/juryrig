@@ -9,7 +9,7 @@ use winit::{
 use crate::vulkan::Vulkan;
 
 fn main() {
-    pretty_env_logger::init_custom_env("KHODOL_LOG_LEVEL");
+    pretty_env_logger::init_custom_env("JR_LOG_LEVEL");
 
     info!("Logs initialised.");
     let event_loop = EventLoop::new();
