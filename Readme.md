@@ -1,6 +1,8 @@
 # Juryrig
 ## A simple rust game engine
 
+![CubeDemo](DemoCube.gif)
+
 ## Dependencies
 Vulkan SDK
 
