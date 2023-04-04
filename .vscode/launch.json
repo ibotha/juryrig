@@ -7,11 +7,11 @@
     {
       "type": "lldb",
       "request": "launch",
-      "name": "Debug unit tests in library 'khodol'",
+      "name": "Debug unit tests in library 'juryrig'",
       "cargo": {
-        "args": ["test", "--no-run", "--lib", "--package=khodol"],
+        "args": ["test", "--no-run", "--lib", "--package=juryrig"],
         "filter": {
-          "name": "khodol",
+          "name": "juryrig",
           "kind": "lib"
         }
       },
@@ -23,7 +23,7 @@
       "request": "launch",
       "name": "Debug executable 'example_app'",
       "cargo": {
-        "args": ["build", "--bin=example_app", "--package=khodol"],
+        "args": ["build", "--bin=example_app", "--package=juryrig"],
         "filter": {
           "name": "example_app",
           "kind": "bin"
@@ -40,7 +40,7 @@
       "request": "launch",
       "name": "Debug unit tests in executable 'example_app'",
       "cargo": {
-        "args": ["test", "--no-run", "--bin=example_app", "--package=khodol"],
+        "args": ["test", "--no-run", "--bin=example_app", "--package=juryrig"],
         "filter": {
           "name": "example_app",
           "kind": "bin"
