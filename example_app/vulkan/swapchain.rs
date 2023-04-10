@@ -11,7 +11,7 @@ use gpu_allocator::{
     MemoryLocation,
 };
 
-use super::{surface::Surface, QueueFamilies};
+use super::{buffer::Image, surface::Surface, QueueFamilies};
 
 pub(super) struct Swapchain {
     loader: khr::Swapchain,
@@ -25,8 +25,7 @@ pub(super) struct Swapchain {
     may_begin_drawing: Vec<vk::Fence>,
     amount_of_images: u32,
     current_image: usize,
-    depth_image: vk::Image,
-    depth_image_allocation: Option<gpu_allocator::vulkan::Allocation>,
+    depth_image: Image,
     depth_imageview: vk::ImageView,
 }
 
@@ -117,28 +116,14 @@ impl Swapchain {
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .queue_family_indices(&queuefamilies);
 
-        let depth_image = unsafe { logical_device.create_image(&depth_image_info, None) }?;
-
-        let requirements = unsafe { logical_device.get_image_memory_requirements(depth_image) };
-
-        let depth_image_allocation_info = AllocationCreateDesc {
-            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-            linear: true,
-            location: MemoryLocation::GpuOnly,
-            name: "Depth Buffer",
-            requirements,
-        };
-
-        let depth_image_allocation = allocator.allocate(&depth_image_allocation_info).unwrap();
-
-        // Bind memory to the buffer
-        unsafe {
-            logical_device.bind_image_memory(
-                depth_image,
-                depth_image_allocation.memory(),
-                depth_image_allocation.offset(),
-            )?
-        };
+        let depth_image = Image::new(
+            allocator,
+            &logical_device,
+            &depth_image_info,
+            MemoryLocation::GpuOnly,
+            "depth buffer",
+            None,
+        )?;
 
         let subresource_range = vk::ImageSubresourceRange::builder()
             .aspect_mask(vk::ImageAspectFlags::DEPTH)
@@ -147,7 +132,7 @@ impl Swapchain {
             .base_array_layer(0)
             .layer_count(1);
         let imageview_create_info = vk::ImageViewCreateInfo::builder()
-            .image(depth_image)
+            .image(depth_image.image)
             .view_type(vk::ImageViewType::TYPE_2D)
             .format(vk::Format::D32_SFLOAT)
             .subresource_range(*subresource_range);
@@ -183,7 +168,6 @@ impl Swapchain {
             rendering_finished,
             current_image: 0,
             depth_image,
-            depth_image_allocation: Some(depth_image_allocation),
             depth_imageview,
         })
     }
@@ -274,12 +258,8 @@ impl Swapchain {
         logical_device: &Device,
         allocator: &mut Allocator,
     ) -> () {
+        self.depth_image.cleanup(allocator, logical_device);
         logical_device.destroy_image_view(self.depth_imageview, None);
-        logical_device.destroy_image(self.depth_image, None);
-
-        _ = allocator
-            .free(self.depth_image_allocation.take().unwrap())
-            .unwrap();
 
         for fence in &self.may_begin_drawing {
             logical_device.destroy_fence(*fence, None);

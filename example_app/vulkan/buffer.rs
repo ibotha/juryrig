@@ -17,6 +17,7 @@ impl<T> Buffer<T> {
         size: u64,
         usage: vk::BufferUsageFlags,
         name: &str,
+        mem_location: gpu_allocator::MemoryLocation,
     ) -> Result<Buffer<T>, ash::vk::Result> {
         let buffer_create_info = vk::BufferCreateInfo::builder()
             .size(size * (size_of::<T>() as u64))
@@ -34,7 +35,7 @@ impl<T> Buffer<T> {
                 name: name,
                 requirements,
                 linear: true,
-                location: gpu_allocator::MemoryLocation::CpuToGpu,
+                location: mem_location,
                 allocation_scheme: AllocationScheme::GpuAllocatorManaged,
             })
             .unwrap();
@@ -69,6 +70,68 @@ impl<T> Buffer<T> {
 
     pub(super) unsafe fn cleanup(&mut self, allocator: &mut Allocator, logical_device: &Device) {
         logical_device.destroy_buffer(self.buffer, None);
+
+        allocator.free(self.allocation.take().unwrap()).unwrap();
+    }
+}
+
+pub(super) struct Image {
+    pub(super) image: vk::Image,
+    allocation: Option<Allocation>,
+}
+
+impl Image {
+    pub(super) fn new(
+        allocator: &mut Allocator,
+        logical_device: &Device,
+        create_info: &vk::ImageCreateInfo,
+        location: gpu_allocator::MemoryLocation,
+        name: &str,
+        linear: Option<bool>,
+    ) -> Result<Image, ash::vk::Result> {
+        let image = unsafe { logical_device.create_image(&create_info, None)? };
+
+        let requirements = unsafe { logical_device.get_image_memory_requirements(image) };
+        let allocation = allocator
+            .allocate(&AllocationCreateDesc {
+                name: name,
+                requirements,
+                linear: linear.unwrap_or(false),
+                location,
+                allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+            })
+            .unwrap();
+
+        // Bind memory to the buffer
+        unsafe {
+            logical_device.bind_image_memory(image, allocation.memory(), allocation.offset())?
+        };
+
+        Ok(Image {
+            image,
+            allocation: Some(allocation),
+        })
+    }
+
+    pub(super) fn copy<T>(&mut self, in_data: &Vec<T>) -> Result<(), ()> {
+        match &self.allocation {
+            Some(allocation) => {
+                let data_ptr = allocation.mapped_ptr().unwrap().cast().as_ptr();
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        in_data.as_ptr(),
+                        data_ptr,
+                        in_data.len() * size_of::<T>(),
+                    );
+                }
+                Ok(())
+            }
+            None => Err(()),
+        }
+    }
+
+    pub(super) unsafe fn cleanup(&mut self, allocator: &mut Allocator, logical_device: &Device) {
+        logical_device.destroy_image(self.image, None);
 
         allocator.free(self.allocation.take().unwrap()).unwrap();
     }

@@ -1,6 +1,6 @@
 use ash::{
     extensions::{ext::DebugUtils, khr},
-    vk::{self, PipelineLayout, PipelineLayoutCreateInfo, PushConstantRange},
+    vk::{self},
     Device, Entry, Instance,
 };
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
@@ -9,7 +9,7 @@ use std::ffi::{CStr, CString};
 use winit::window::Window;
 
 mod surface;
-use self::surface::Surface;
+use self::{buffer::Image, surface::Surface};
 
 mod swapchain;
 use self::swapchain::Swapchain;
@@ -22,6 +22,12 @@ use self::debug::Debug;
 
 mod buffer;
 use self::buffer::Buffer;
+
+mod texture;
+use self::texture::Texture;
+
+mod camera;
+use self::camera::Camera;
 
 struct QueueFamilies {
     graphics_q_index: Option<u32>,
@@ -126,7 +132,6 @@ impl Pools {
 pub struct Vulkan {
     instance: Instance,
     entry: Entry,
-    pub window: Window,
     debug: std::mem::ManuallyDrop<Debug>,
     surface: std::mem::ManuallyDrop<Surface>,
     queue_families: QueueFamilies,
@@ -138,8 +143,11 @@ pub struct Vulkan {
     command_buffer_pools: Pools,
     command_buffers: Vec<vk::CommandBuffer>,
     allocator: std::mem::ManuallyDrop<Allocator>,
-    index_buffer: Buffer<u32>,  // [0, 1, 2, 2, 3, 0]
-    vertex_buffer: Buffer<f32>, // [{vertex_info_0}, {vertex_info_1}, {vertex_info_2}, {vertex_info_3}]
+    index_buffer: Buffer<u32>,
+    vertex_buffer: Buffer<f32>,
+    instance_buffer: Buffer<[[f32; 4]; 4]>,
+    atlas: Texture,
+    pub camera: Camera,
 }
 
 impl Vulkan {
@@ -160,7 +168,7 @@ impl Vulkan {
         return extension_name_pointers;
     }
 
-    pub fn new(window: Window) -> std::result::Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(window: &Window) -> std::result::Result<Self, Box<dyn std::error::Error>> {
         let entry = unsafe { Entry::load() }?;
 
         let mut debug_create_info = Debug::create_info();
@@ -220,19 +228,65 @@ impl Vulkan {
             12 * 3,
             vk::BufferUsageFlags::INDEX_BUFFER,
             "index",
+            gpu_allocator::MemoryLocation::CpuToGpu,
         )?;
         let vertex_buffer = Buffer::<f32>::new(
             &mut allocator,
             &logical_device,
-            8 * 8,
+            (3 + 2 + 3) * 36,
             vk::BufferUsageFlags::VERTEX_BUFFER,
             "vertex",
+            gpu_allocator::MemoryLocation::CpuToGpu,
         )?;
+        let instance_buffer = Buffer::<[[f32; 4]; 4]>::new(
+            &mut allocator,
+            &logical_device,
+            4,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+            "vertex",
+            gpu_allocator::MemoryLocation::CpuToGpu,
+        )?;
+
+        let mut image = image::io::Reader::open("MC_Atlas.png")?.decode()?.flipv();
+
+        let queuefamilies = [queue_families.graphics_q_index.unwrap()];
+
+        let mut atlas = Texture::new(
+            &mut allocator,
+            &logical_device,
+            image.width(),
+            image.height(),
+            "atlas",
+            &queuefamilies,
+        )?;
+
+        let raw = image.as_mut_rgba8().unwrap().as_raw();
+
+        atlas.upload(&mut allocator, &logical_device, &raw, &queues, &pools);
+
+        let descriptor_image_infos = [vk::DescriptorImageInfo::builder()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(atlas.image_view)
+            .sampler(atlas.sampler)
+            .build()];
+
+        for i in 0..3 {
+            let descriptor_writes = [vk::WriteDescriptorSet::builder()
+                .dst_set(graphics_pipeline.descriptor_sets[i])
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .dst_array_element(0)
+                .image_info(&descriptor_image_infos)
+                .build()];
+            unsafe { logical_device.update_descriptor_sets(&descriptor_writes, &[]) };
+        }
+
+        let mut my_camera = Camera::default();
+        my_camera.move_backward(6f32);
 
         Ok(Self {
             instance,
             entry,
-            window,
             debug: std::mem::ManuallyDrop::new(debug),
             surface: std::mem::ManuallyDrop::new(surface),
             queue_families,
@@ -246,6 +300,9 @@ impl Vulkan {
             allocator: std::mem::ManuallyDrop::new(allocator),
             index_buffer,
             vertex_buffer,
+            instance_buffer,
+            atlas,
+            camera: my_camera,
         })
     }
 
@@ -357,10 +414,13 @@ impl Vulkan {
         let mut buffer_address_features =
             vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR::builder().buffer_device_address(true);
 
+        let enabled_features = vk::PhysicalDeviceFeatures::builder().sampler_anisotropy(true);
+
         let device_create_info = vk::DeviceCreateInfo::builder()
             .push_next(&mut buffer_address_features)
             .queue_create_infos(&queue_infos)
             .enabled_extension_names(&device_extension_name_pointers)
+            .enabled_features(&enabled_features)
             .enabled_layer_names(&layer_name_pointers);
 
         let logical_device =
@@ -495,68 +555,176 @@ impl Vulkan {
                 );
 
                 let index_data: Vec<u32> = vec![
-                    0, 1, 3, 1, 2, 3, // front face
-                    0, 4, 5, 5, 1, 0, // top face
-                    6, 3, 2, 6, 7, 3, // bottom face
-                    5, 7, 6, 5, 4, 7, // back face
-                    4, 0, 3, 4, 3, 7, // left face
-                    1, 5, 6, 1, 6, 2, // right face
+                    0, 1, 2, 3, 4, 5, // front face
+                    6, 7, 8, 9, 10, 11, // top face
+                    12, 13, 14, 15, 16, 17, // bottom face
+                    18, 19, 20, 21, 22, 23, // back face
+                    24, 25, 26, 27, 28, 29, // left face
+                    30, 31, 32, 33, 34, 35, // right face
                 ];
 
                 let vertex_data: Vec<f32> = vec![
-                    -0.5f32, 0.5f32, -0.5f32, 1.0f32, // 0
-                    0.0f32, 0.0f32, 0.0f32, 1.0f32, // Color black
-                    0.5f32, 0.5f32, -0.5f32, 1.0f32, // 1
-                    0.0f32, 0.0f32, 1.0f32, 1.0f32, // Color blue
-                    0.5f32, -0.5f32, -0.5f32, 1.0f32, // 2
-                    0.0f32, 1.0f32, 0.0f32, 1.0f32, // Color green
-                    -0.5f32, -0.5f32, -0.5f32, 1.0f32, // 3
-                    0.0f32, 1.0f32, 1.0f32, 1.0f32, // Color cyan
-                    -0.5f32, 0.5f32, 0.5f32, 1.0f32, // 4
-                    1.0f32, 0.0f32, 0.0f32, 1.0f32, // Color red
-                    0.5f32, 0.5f32, 0.5f32, 1.0f32, // 5
-                    1.0f32, 0.0f32, 1.0f32, 1.0f32, // Color magenta
-                    0.5f32, -0.5f32, 0.5f32, 1.0f32, // 6
-                    1.0f32, 1.0f32, 0.0f32, 1.0f32, // Color yellow
-                    -0.5f32, -0.5f32, 0.5f32, 1.0f32, // 7
-                    1.0f32, 1.0f32, 1.0f32, 1.0f32, // Color white
+                    -1.000000, 1.000000, -1.000000, // 0
+                    0.374988, 0.666810, //
+                    -0.0000, 1.0000, -0.0000, //
+                    1.000000, 1.000000, 1.000000, // 1
+                    0.343755, 0.733482, //
+                    -0.0000, 1.0000, -0.0000, //
+                    1.000000, 1.000000, -1.000000, // 2
+                    0.343804, 0.666761, //
+                    -0.0000, 1.0000, -0.0000, //
+                    1.000000, 1.000000, 1.000000, // 3
+                    0.312471, 0.733295, //
+                    -1.0000, -0.0000, -0.0000, //
+                    -1.000000, -1.000000, 1.000000, // 4
+                    0.281288, 0.666747, //
+                    -1.0000, -0.0000, -0.0000, //
+                    1.000000, -1.000000, 1.000000, // 5
+                    0.312494, 0.666682, //
+                    -1.0000, -0.0000, -0.0000, //
+                    -1.000000, 1.000000, 1.000000, // 6
+                    0.406424, 0.733344, //
+                    -0.0000, -1.0000, -0.0000, //
+                    -1.000000, -1.000000, -1.000000, // 7
+                    0.375017, 0.666931, //
+                    -0.0000, -1.0000, -0.0000, //
+                    -1.000000, -1.000000, 1.000000, // 8
+                    0.406197, 0.667131, //
+                    -0.0000, -1.0000, -0.0000, //
+                    1.000000, -1.000000, -1.000000, // 9
+                    0.374875, 0.667210, //
+                    -0.0000, -1.0000, -0.0000, //
+                    -1.000000, -1.000000, 1.000000, // 10
+                    0.343703, 0.733315, //
+                    -0.0000, -1.0000, -0.0000, //
+                    -1.000000, -1.000000, -1.000000, // 11
+                    0.343703, 0.667158, //
+                    -0.0000, -1.0000, -0.0000, //
+                    1.000000, 1.000000, -1.000000, // 12
+                    0.343723, 0.733344, //
+                    1.0000, -0.0000, -0.0000, //
+                    1.000000, -1.000000, 1.000000, // 13
+                    0.312531, 0.666785, //
+                    1.0000, -0.0000, -0.0000, //
+                    1.000000, -1.000000, -1.000000, // 14
+                    0.343706, 0.666848, //
+                    1.0000, -0.0000, -0.0000, //
+                    -1.000000, 1.000000, -1.000000, // 15
+                    0.406446, 0.733250, //
+                    -0.0000, -0.0000, -1.0000, //
+                    1.000000, -1.000000, -1.000000, // 16
+                    0.375170, 0.667212, //
+                    -0.0000, -0.0000, -1.0000, //
+                    -1.000000, -1.000000, -1.000000, // 17
+                    0.406162, 0.666986, //
+                    -0.0000, -0.0000, -1.0000, //
+                    -1.000000, 1.000000, -1.000000, // 18
+                    0.374988, 0.666810, //
+                    -0.0000, 1.0000, -0.0000, //
+                    -1.000000, 1.000000, 1.000000, // 19
+                    0.375027, 0.733414, //
+                    -0.0000, 1.0000, -0.0000, //
+                    1.000000, 1.000000, 1.000000, // 20
+                    0.343755, 0.733482, //
+                    -0.0000, 1.0000, -0.0000, //
+                    1.000000, 1.000000, 1.000000, // 21
+                    0.312471, 0.733295, //
+                    -1.0000, -0.0000, -0.0000, //
+                    -1.000000, 1.000000, 1.000000, // 22
+                    0.281267, 0.733332, //
+                    -1.0000, -0.0000, -0.0000, //
+                    -1.000000, -1.000000, 1.000000, // 23
+                    0.281288, 0.666747, //
+                    -1.0000, -0.0000, -0.0000, //
+                    -1.000000, 1.000000, 1.000000, // 24
+                    0.406424, 0.733344, //
+                    -0.0000, -1.0000, -0.0000, //
+                    -1.000000, 1.000000, -1.000000, // 25
+                    0.375060, 0.733192, //
+                    -0.0000, -1.0000, -0.0000, //
+                    -1.000000, -1.000000, -1.000000, // 26
+                    0.375017, 0.666931, //
+                    -0.0000, -1.0000, -0.0000, //
+                    1.000000, -1.000000, -1.000000, // 27
+                    0.374875, 0.667210, //
+                    -0.0000, -1.0000, -0.0000, //
+                    1.000000, -1.000000, 1.000000, // 28
+                    0.374875, 0.733262, //
+                    -0.0000, -1.0000, -0.0000, //
+                    -1.000000, -1.000000, 1.000000, // 29
+                    0.343703, 0.733315, //
+                    -0.0000, -1.0000, -0.0000, //
+                    1.000000, 1.000000, -1.000000, // 30
+                    0.343723, 0.733344, //
+                    1.0000, -0.0000, -0.0000, //
+                    1.000000, 1.000000, 1.000000, // 31
+                    0.312471, 0.733295, //
+                    1.0000, -0.0000, -0.0000, //
+                    1.000000, -1.000000, 1.000000, // 32
+                    0.312531, 0.666785, //
+                    1.0000, -0.0000, -0.0000, //
+                    -1.000000, 1.000000, -1.000000, // 33
+                    0.406446, 0.733250, //
+                    -0.0000, -0.0000, -1.0000, //
+                    1.000000, 1.000000, -1.000000, // 34
+                    0.375164, 0.733269, //
+                    -0.0000, -0.0000, -1.0000, //
+                    1.000000, -1.000000, -1.000000, // 35
+                    0.375170, 0.667212, //
+                    -0.0000, -0.0000, -1.0000, //
                 ];
 
-                let mut projection = glm::ext::perspective(
-                    glm::radians(70.0f32),
-                    self.window.inner_size().width as f32
-                        / (self.window.inner_size().height as f32),
-                    0.01f32,
-                    1000.0f32,
-                );
                 static mut a: f32 = 0.01f32;
                 a += 0.01f32;
 
-                projection = glm::ext::rotate(
-                    &glm::ext::translate(&projection, glm::vec3(0.0f32, 0.0f32, -3f32)),
-                    a,
-                    glm::vec3(0f32, 1f32, glm::sin(a / 2f32)),
-                );
-                let projection_raw = std::mem::transmute::<&[glm::Vector4<f32>; 4], &[u8; 64]>(
-                    projection.as_array(),
-                );
+                let instance_data: Vec<[[f32; 4]; 4]> = vec![
+                    (na::Matrix4::new_translation(&na::Vector3::new(0f32, 0f32, 0f32))
+                        * na::Matrix4::from_euler_angles(a, 0f32, 0f32))
+                    .into(),
+                    (na::Matrix4::new_translation(&na::Vector3::new(0f32, 0f32, 3f32))
+                        * na::Matrix4::from_euler_angles(0f32, a / 3f32, 0f32))
+                    .into(),
+                    (na::Matrix4::new_translation(&na::Vector3::new(0f32, 3f32, 0f32))
+                        * na::Matrix4::from_euler_angles(0f32, 0f32, a / 2.5f32))
+                    .into(),
+                    (na::Matrix4::new_translation(&na::Vector3::new(3f32, 0f32, 0f32))
+                        * na::Matrix4::from_euler_angles(0f32, a / 2f32, a / 3f32))
+                    .into(),
+                ];
 
-                _ = self
-                    .index_buffer
+                let projection: [[f32; 4]; 4] =
+                    (self.camera.projectionmatrix * self.camera.viewmatrix).into();
+
+                self.index_buffer
                     .copy(&index_data)
                     .expect("Couldn't copy!!!!");
 
-                _ = self
-                    .vertex_buffer
+                self.vertex_buffer
                     .copy(&vertex_data)
                     .expect("Couldn't copy!!!!");
+
+                self.instance_buffer
+                    .copy(&instance_data)
+                    .expect("Couldn't copy!!!!");
+
                 self.logical_device.cmd_push_constants(
                     commandbuffer,
                     self.graphics_pipeline.layout,
                     vk::ShaderStageFlags::VERTEX,
                     0,
-                    projection_raw,
+                    &unsafe { std::mem::transmute::<[[f32; 4]; 4], [u8; 64]>(projection) },
                 );
+
+                self.logical_device.cmd_bind_descriptor_sets(
+                    commandbuffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.graphics_pipeline.layout,
+                    0,
+                    &[self.graphics_pipeline.descriptor_sets
+                        [frame_buffer_info.image_index as usize]],
+                    &[],
+                );
+
                 self.logical_device.cmd_bind_index_buffer(
                     commandbuffer,
                     self.index_buffer.buffer,
@@ -567,13 +735,12 @@ impl Vulkan {
                 self.logical_device.cmd_bind_vertex_buffers(
                     commandbuffer,
                     0,
-                    &[self.vertex_buffer.buffer],
-                    &[0],
+                    &[self.instance_buffer.buffer, self.vertex_buffer.buffer],
+                    &[0, 0],
                 );
 
                 self.logical_device
-                    .cmd_draw_indexed(commandbuffer, 12 * 3, 1, 0, 0, 0);
-                //self.logical_device.cmd_draw(commandbuffer, 4, 1, 0, 0);
+                    .cmd_draw_indexed(commandbuffer, 12 * 3, 4, 0, 0, 0);
 
                 self.logical_device.cmd_end_render_pass(commandbuffer);
                 self.logical_device.end_command_buffer(commandbuffer)?;
@@ -610,6 +777,12 @@ impl Drop for Vulkan {
             self.logical_device
                 .device_wait_idle()
                 .expect("something wrong while waiting");
+
+            self.atlas
+                .cleanup(&mut self.allocator, &self.logical_device);
+
+            self.instance_buffer
+                .cleanup(&mut self.allocator, &self.logical_device);
 
             self.index_buffer
                 .cleanup(&mut self.allocator, &self.logical_device);

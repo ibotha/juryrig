@@ -1,10 +1,15 @@
-use ash::vk::{self, PipelineDepthStencilStateCreateInfo, PushConstantRange};
+use ash::vk::{
+    self, DescriptorSetLayoutBinding, PipelineDepthStencilStateCreateInfo, PushConstantRange,
+};
 
 use super::swapchain::Swapchain;
 
 pub(super) struct Pipeline {
     pub(super) pipeline: vk::Pipeline,
     pub(super) layout: vk::PipelineLayout,
+    descriptor_pool: vk::DescriptorPool,
+    pub(super) descriptor_sets: Vec<vk::DescriptorSet>,
+    descriptor_set_layouts: [vk::DescriptorSetLayout; 1],
 }
 
 impl Pipeline {
@@ -12,6 +17,8 @@ impl Pipeline {
         unsafe {
             logical_device.destroy_pipeline(self.pipeline, None);
             logical_device.destroy_pipeline_layout(self.layout, None);
+            logical_device.destroy_descriptor_pool(self.descriptor_pool, None);
+            logical_device.destroy_descriptor_set_layout(self.descriptor_set_layouts[0], None);
         }
     }
 
@@ -57,12 +64,50 @@ impl Pipeline {
                 .offset(16)
                 .format(vk::Format::R32G32B32A32_SFLOAT)
                 .build(),
+            vk::VertexInputAttributeDescription::builder()
+                .binding(0)
+                .location(2)
+                .offset(32)
+                .format(vk::Format::R32G32B32A32_SFLOAT)
+                .build(),
+            vk::VertexInputAttributeDescription::builder()
+                .binding(0)
+                .location(3)
+                .offset(48)
+                .format(vk::Format::R32G32B32A32_SFLOAT)
+                .build(),
+            vk::VertexInputAttributeDescription::builder()
+                .binding(1)
+                .location(4)
+                .offset(0)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .build(),
+            vk::VertexInputAttributeDescription::builder()
+                .binding(1)
+                .location(5)
+                .offset(12)
+                .format(vk::Format::R32G32_SFLOAT)
+                .build(),
+            vk::VertexInputAttributeDescription::builder()
+                .binding(1)
+                .location(6)
+                .offset(20)
+                .format(vk::Format::R32G32B32_SFLOAT)
+                .build(),
         ];
-        let vertex_binding_descs = [vk::VertexInputBindingDescription::builder()
-            .binding(0)
-            .stride(32)
-            .input_rate(vk::VertexInputRate::VERTEX)
-            .build()];
+
+        let vertex_binding_descs = [
+            vk::VertexInputBindingDescription::builder()
+                .binding(0)
+                .stride(64)
+                .input_rate(vk::VertexInputRate::INSTANCE)
+                .build(),
+            vk::VertexInputBindingDescription::builder()
+                .binding(1)
+                .stride(32)
+                .input_rate(vk::VertexInputRate::VERTEX)
+                .build(),
+        ];
 
         let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder()
             .vertex_attribute_descriptions(&vertex_attrib_descs)
@@ -119,13 +164,49 @@ impl Pipeline {
             .depth_test_enable(true)
             .depth_write_enable(true)
             .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
+
         let push_constant_ranges = [PushConstantRange::builder()
             .size(64)
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .build()];
 
-        let pipelinelayout_info =
-            vk::PipelineLayoutCreateInfo::builder().push_constant_ranges(&push_constant_ranges);
+        let layout_bindings = [DescriptorSetLayoutBinding::builder()
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+            .binding(0)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .build()];
+
+        let descriptor_set_layout_info =
+            vk::DescriptorSetLayoutCreateInfo::builder().bindings(&layout_bindings);
+
+        let descriptor_set_layouts = [unsafe {
+            logical_device.create_descriptor_set_layout(&descriptor_set_layout_info, None)
+        }?];
+
+        let descriptor_pool_sizes = [vk::DescriptorPoolSize::builder()
+            .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(3)
+            .build()];
+
+        let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
+            .pool_sizes(&descriptor_pool_sizes)
+            .max_sets(3);
+
+        let descriptor_pool =
+            unsafe { logical_device.create_descriptor_pool(&descriptor_pool_info, None) }?;
+        let a = vec![descriptor_set_layouts[0]; 3];
+
+        let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&a);
+        let descriptor_sets =
+            unsafe { logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info) }?;
+
+        let pipelinelayout_info = vk::PipelineLayoutCreateInfo::builder()
+            .push_constant_ranges(&push_constant_ranges)
+            .set_layouts(&descriptor_set_layouts);
+
         let pipelinelayout =
             unsafe { logical_device.create_pipeline_layout(&pipelinelayout_info, None) }?;
 
@@ -160,6 +241,9 @@ impl Pipeline {
         Ok(Pipeline {
             pipeline: graphicspipeline,
             layout: pipelinelayout,
+            descriptor_pool,
+            descriptor_sets,
+            descriptor_set_layouts,
         })
     }
 }

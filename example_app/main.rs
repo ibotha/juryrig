@@ -19,8 +19,8 @@ fn main() {
         .build(&event_loop)
     {
         Ok(window) => {
-            let cached_window_id = window.id();
-            let mut vulkan = Vulkan::new(window).expect("Could not init vulkan!");
+            let cached_window_id = window.id().clone();
+            let mut vulkan: Option<Vulkan> = None;
 
             event_loop.run(move |event, _, control_flow| {
                 control_flow.set_poll();
@@ -31,6 +31,42 @@ fn main() {
                     } => {
                         if cached_window_id == window_id {
                             control_flow.set_exit()
+                        }
+                    }
+                    Event::WindowEvent {
+                        event: WindowEvent::KeyboardInput { input, .. },
+                        ..
+                    } => {
+                        if let winit::event::KeyboardInput {
+                            state: winit::event::ElementState::Pressed,
+                            virtual_keycode: Some(keycode),
+                            ..
+                        } = input
+                        {
+                            match &mut vulkan {
+                                Some(v) => match keycode {
+                                    winit::event::VirtualKeyCode::Right => {
+                                        v.camera.turn_right(0.1);
+                                    }
+                                    winit::event::VirtualKeyCode::Left => {
+                                        v.camera.turn_left(0.1);
+                                    }
+                                    winit::event::VirtualKeyCode::Up => {
+                                        v.camera.move_forward(0.05);
+                                    }
+                                    winit::event::VirtualKeyCode::Down => {
+                                        v.camera.move_backward(0.05);
+                                    }
+                                    winit::event::VirtualKeyCode::PageUp => {
+                                        v.camera.turn_up(0.02);
+                                    }
+                                    winit::event::VirtualKeyCode::PageDown => {
+                                        v.camera.turn_down(0.02);
+                                    }
+                                    _ => {}
+                                },
+                                _ => {}
+                            }
                         }
                     }
                     Event::DeviceEvent {
@@ -54,18 +90,27 @@ fn main() {
                     Event::Resumed => {
                         //TODO: Initialise graphics context
                         info!("Event-Startup");
+                        vulkan = Some(Vulkan::new(&window).expect("Could not init vulkan!"))
                     }
                     Event::LoopDestroyed => {
                         // TODO: Destroy everything here
                         info!("Event-End");
+                        vulkan = None
                     }
                     Event::MainEventsCleared => {
                         // Event processing happens here
-                        vulkan.window.request_redraw();
+                        window.request_redraw();
                     }
-                    Event::RedrawRequested(_) => {
-                        _ = vulkan.swap_framebuffers();
-                    }
+                    Event::RedrawRequested(_) => match &mut vulkan {
+                        Some(v) => match v.swap_framebuffers() {
+                            Err(e) => {
+                                error!("Could not render frame! {:?}", e)
+                            }
+                            Ok(a) => {}
+                        },
+                        None => {}
+                    },
+
                     _ => {}
                 }
             });
