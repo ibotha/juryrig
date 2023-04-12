@@ -2,12 +2,12 @@ use std::{marker::PhantomData, mem::size_of};
 
 use ash::{vk, Device};
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator};
-use log::info;
 
 pub(super) struct Buffer<T> {
     pub(super) buffer: vk::Buffer,
     allocation: Option<Allocation>,
     phantom: PhantomData<T>,
+    size: u64,
 }
 
 impl<T> Buffer<T> {
@@ -20,7 +20,7 @@ impl<T> Buffer<T> {
         mem_location: gpu_allocator::MemoryLocation,
     ) -> Result<Buffer<T>, ash::vk::Result> {
         let buffer_create_info = vk::BufferCreateInfo::builder()
-            .size(size * (size_of::<T>() as u64))
+            .size((size as usize * size_of::<T>()) as u64)
             .usage(usage);
 
         let buffer = unsafe {
@@ -47,20 +47,17 @@ impl<T> Buffer<T> {
         Ok(Buffer {
             buffer,
             allocation: Some(allocation),
+            size,
             phantom: PhantomData,
         })
     }
 
-    pub(super) fn copy(&mut self, in_data: &Vec<T>) -> Result<(), ()> {
+    pub(super) fn copy(&mut self, in_data: &[T]) -> Result<(), ()> {
         match &self.allocation {
             Some(allocation) => {
                 let data_ptr = allocation.mapped_ptr().unwrap().cast().as_ptr();
                 unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        in_data.as_ptr(),
-                        data_ptr,
-                        in_data.len() * size_of::<T>(),
-                    );
+                    std::ptr::copy_nonoverlapping(in_data.as_ptr(), data_ptr, in_data.len());
                 }
                 Ok(())
             }
@@ -72,6 +69,10 @@ impl<T> Buffer<T> {
         logical_device.destroy_buffer(self.buffer, None);
 
         allocator.free(self.allocation.take().unwrap()).unwrap();
+    }
+
+    pub fn len(&self) -> u64 {
+        self.size
     }
 }
 
@@ -118,11 +119,7 @@ impl Image {
             Some(allocation) => {
                 let data_ptr = allocation.mapped_ptr().unwrap().cast().as_ptr();
                 unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        in_data.as_ptr(),
-                        data_ptr,
-                        in_data.len() * size_of::<T>(),
-                    );
+                    std::ptr::copy_nonoverlapping(in_data.as_ptr(), data_ptr, in_data.len());
                 }
                 Ok(())
             }

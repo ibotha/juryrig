@@ -3,7 +3,7 @@ mod vulkan;
 use winit::{
     event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent},
     event_loop::EventLoop,
-    window::{Fullscreen, WindowBuilder},
+    window::WindowBuilder,
 };
 
 use crate::vulkan::Vulkan;
@@ -106,7 +106,7 @@ fn main() {
                             Err(e) => {
                                 error!("Could not render frame! {:?}", e)
                             }
-                            Ok(a) => {}
+                            Ok(_) => {}
                         },
                         None => {}
                     },

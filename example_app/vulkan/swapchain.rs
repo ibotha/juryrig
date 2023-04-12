@@ -1,15 +1,9 @@
 use ash::{
     extensions::khr,
-    vk::{
-        self, CommandBuffer, Fence, Framebuffer, PipelineStageFlags, Queue, Semaphore,
-        SurfaceFormatKHR,
-    },
+    vk::{self, Framebuffer, PipelineStageFlags, Queue, SurfaceFormatKHR},
     Device, Instance,
 };
-use gpu_allocator::{
-    vulkan::{AllocationCreateDesc, AllocationScheme, Allocator},
-    MemoryLocation,
-};
+use gpu_allocator::{vulkan::Allocator, MemoryLocation};
 
 use super::{buffer::Image, surface::Surface, QueueFamilies};
 

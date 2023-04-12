@@ -119,7 +119,10 @@ impl Texture {
             gpu_allocator::MemoryLocation::CpuToGpu,
         )?;
 
-        buffer.copy(&raw);
+        match buffer.copy(&raw) {
+            Err(_) => panic!("Could not upload texture!"),
+            Ok(_) => {}
+        }
         let commandbuf_allocate_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(pools.commandpool_graphics)
             .command_buffer_count(1);

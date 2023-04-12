@@ -200,6 +200,7 @@ impl Pipeline {
         let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
             .set_layouts(&a);
+
         let descriptor_sets =
             unsafe { logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info) }?;
 
