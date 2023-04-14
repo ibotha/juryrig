@@ -8,17 +8,20 @@ mod surface;
 mod swapchain;
 mod texture;
 
+use crate::jr_image::RGBAImage;
+
 use self::{
-    error::VulkanError,
+    error::{InitError, RuntimeError},
     initialisation::{
         create_instance, init_device_and_queues, init_physical_device_and_properties,
         QueueFamilies, Queues,
     },
     mesh::ShaderVertexData,
     surface::Surface,
+    texture::{TextureHandle, TextureStore},
 };
 use ash::{
-    vk::{self},
+    vk::{self, DescriptorImageInfo},
     Device, Entry, Instance,
 };
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
@@ -44,12 +47,14 @@ enum VertexBufferBindings {
 
 #[repr(C)]
 pub struct InstanceData {
-    pub model: na::Mat4<f32>,
+    pub model: [[f32; 4]; 4],
+    pub texture_index: u32,
 }
 
 struct Pools {
-    commandpool_graphics: vk::CommandPool,
-    commandpool_transfer: vk::CommandPool,
+    graphics: vk::CommandPool,
+    compute: vk::CommandPool,
+    transfer: vk::CommandPool,
 }
 
 impl Pools {
@@ -57,26 +62,38 @@ impl Pools {
         logical_device: &ash::Device,
         queue_families: &QueueFamilies,
     ) -> Result<Pools, vk::Result> {
+        // Graphics Pool
         let graphics_commandpool_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(queue_families.graphics_q_index.unwrap())
+            .queue_family_index(queue_families.graphics)
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
         let commandpool_graphics =
             unsafe { logical_device.create_command_pool(&graphics_commandpool_info, None) }?;
+
+        // Compute Pool
+        let compute_commandpool_info = vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(queue_families.compute)
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+        let commandpool_compute =
+            unsafe { logical_device.create_command_pool(&graphics_commandpool_info, None) }?;
+
+        // Transfer Pool
         let transfer_commandpool_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(queue_families.transfer_q_index.unwrap())
+            .queue_family_index(queue_families.transfer)
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
         let commandpool_transfer =
             unsafe { logical_device.create_command_pool(&transfer_commandpool_info, None) }?;
 
         Ok(Pools {
-            commandpool_graphics,
-            commandpool_transfer,
+            graphics: commandpool_graphics,
+            compute: commandpool_compute,
+            transfer: commandpool_transfer,
         })
     }
     fn cleanup(&self, logical_device: &ash::Device) {
         unsafe {
-            logical_device.destroy_command_pool(self.commandpool_graphics, None);
-            logical_device.destroy_command_pool(self.commandpool_transfer, None);
+            logical_device.destroy_command_pool(self.graphics, None);
+            logical_device.destroy_command_pool(self.compute, None);
+            logical_device.destroy_command_pool(self.transfer, None);
         }
     }
 }
@@ -96,13 +113,13 @@ pub struct Vulkan {
     command_buffers: Vec<vk::CommandBuffer>,
     allocator: std::mem::ManuallyDrop<Allocator>,
     instance_buffer: Buffer<InstanceData>,
-    atlas: Texture,
     pub camera: Camera,
     cube: StaticMesh,
+    texture_store: TextureStore,
 }
 
 impl Vulkan {
-    pub fn new(window: &Window) -> std::result::Result<Self, VulkanError> {
+    pub fn new(window: &Window) -> std::result::Result<Self, InitError> {
         let entry = unsafe { Entry::load() }?;
 
         let mut debug_create_info = Debug::create_info();
@@ -156,7 +173,7 @@ impl Vulkan {
         let command_buffers =
             Self::create_commandbuffers(&logical_device, &pools, swapchain.size())?;
 
-        let mut instance_buffer = Buffer::<InstanceData>::new(
+        let instance_buffer = Buffer::<InstanceData>::new(
             &mut allocator,
             &logical_device,
             4,
@@ -164,45 +181,6 @@ impl Vulkan {
             "vertex",
             gpu_allocator::MemoryLocation::CpuToGpu,
         )?;
-
-        // let mut image = image::io::Reader::open("test.png")?.decode()?.flipv();
-        let mut image = image::io::Reader::open("MC_Atlas.png")
-            .expect("could not open image")
-            .decode()
-            .expect("could not decode image")
-            .flipv();
-
-        let queuefamilies = [queue_families.graphics_q_index.unwrap()];
-
-        let mut atlas = Texture::new(
-            &mut allocator,
-            &logical_device,
-            image.width(),
-            image.height(),
-            "atlas",
-            &queuefamilies,
-        )?;
-
-        let raw = image.as_mut_rgba8().unwrap().as_raw();
-
-        atlas.upload(&mut allocator, &logical_device, &raw, &queues, &pools);
-
-        let descriptor_image_infos = [vk::DescriptorImageInfo::builder()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(atlas.image_view)
-            .sampler(atlas.sampler)
-            .build()];
-
-        for i in 0..3 {
-            let descriptor_writes = [vk::WriteDescriptorSet::builder()
-                .dst_set(graphics_pipeline.descriptor_sets[i])
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .dst_array_element(0)
-                .image_info(&descriptor_image_infos)
-                .build()];
-            unsafe { logical_device.update_descriptor_sets(&descriptor_writes, &[]) };
-        }
 
         let mut my_camera = Camera::default();
         my_camera.move_backward(6f32);
@@ -400,7 +378,7 @@ impl Vulkan {
         ];
 
         let cube = StaticMesh::new(&mut allocator, &logical_device, &index_data, &vertex_data)?;
-
+        let texture_store = TextureStore::new()?;
         Ok(Self {
             instance,
             entry,
@@ -416,10 +394,21 @@ impl Vulkan {
             command_buffers,
             allocator: std::mem::ManuallyDrop::new(allocator),
             instance_buffer,
-            atlas,
             cube,
             camera: my_camera,
+            texture_store,
         })
+    }
+
+    pub fn register_texture(&mut self, image: &RGBAImage) -> Result<TextureHandle, RuntimeError> {
+        self.texture_store.register_texture(
+            &mut self.allocator,
+            &self.logical_device,
+            &image,
+            &[self.queue_families.graphics],
+            self.queues.graphics,
+            self.command_buffer_pools.graphics,
+        )
     }
 
     fn init_renderpass(
@@ -484,7 +473,7 @@ impl Vulkan {
         amount: usize,
     ) -> Result<Vec<vk::CommandBuffer>, vk::Result> {
         let commandbuf_allocate_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(pools.commandpool_graphics)
+            .command_pool(pools.graphics)
             .command_buffer_count(amount as u32);
         unsafe { logical_device.allocate_command_buffers(&commandbuf_allocate_info) }
     }
@@ -522,19 +511,27 @@ impl Vulkan {
             let instance_data = [
                 InstanceData {
                     model: (na::Matrix4::new_translation(&na::Vector3::new(0f32, 0f32, 0f32))
-                        * na::Matrix4::from_euler_angles(a, 0f32, 0f32)),
+                        * na::Matrix4::from_euler_angles(a, 0f32, 0f32))
+                    .into(),
+                    texture_index: 0,
                 },
                 InstanceData {
                     model: (na::Matrix4::new_translation(&na::Vector3::new(0f32, 0f32, 3f32))
-                        * na::Matrix4::from_euler_angles(0f32, a / 3f32, 0f32)),
+                        * na::Matrix4::from_euler_angles(0f32, a / 3f32, 0f32))
+                    .into(),
+                    texture_index: 0,
                 },
                 InstanceData {
                     model: (na::Matrix4::new_translation(&na::Vector3::new(0f32, 3f32, 0f32))
-                        * na::Matrix4::from_euler_angles(0f32, 0f32, a / 2.5f32)),
+                        * na::Matrix4::from_euler_angles(0f32, 0f32, a / 2.5f32))
+                    .into(),
+                    texture_index: 1,
                 },
                 InstanceData {
                     model: (na::Matrix4::new_translation(&na::Vector3::new(3f32, 0f32, 0f32))
-                        * na::Matrix4::from_euler_angles(0f32, a / 2f32, a / 3f32)),
+                        * na::Matrix4::from_euler_angles(0f32, a / 2f32, a / 3f32))
+                    .into(),
+                    texture_index: 1,
                 },
             ];
 
@@ -551,7 +548,21 @@ impl Vulkan {
                 })
                 .clear_values(&clearvalues);
 
+            let descriptor_image_infos = self.texture_store.get_descriptor_image_info();
+            let descriptor_writes = [vk::WriteDescriptorSet {
+                descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                dst_set: self.graphics_pipeline.descriptor_sets
+                    [frame_buffer_info.image_index as usize],
+                dst_binding: 0,
+                dst_array_element: 0,
+                p_image_info: descriptor_image_infos.as_ptr(),
+                descriptor_count: 2,
+                ..Default::default()
+            }];
             unsafe {
+                self.logical_device
+                    .update_descriptor_sets(&descriptor_writes, &[]);
+
                 self.logical_device.cmd_begin_render_pass(
                     commandbuffer,
                     &renderpass_begininfo,
@@ -570,7 +581,7 @@ impl Vulkan {
                     self.graphics_pipeline.layout,
                     vk::ShaderStageFlags::VERTEX,
                     0,
-                    &unsafe { std::mem::transmute::<[[f32; 4]; 4], [u8; 64]>(projection) },
+                    &std::mem::transmute::<[[f32; 4]; 4], [u8; 64]>(projection),
                 );
 
                 self.logical_device.cmd_bind_descriptor_sets(
@@ -594,10 +605,19 @@ impl Vulkan {
                 self.logical_device.cmd_draw_indexed(
                     commandbuffer,
                     self.cube.index_count() as u32,
-                    4,
+                    2,
                     0,
                     0,
                     0,
+                );
+
+                self.logical_device.cmd_draw_indexed(
+                    commandbuffer,
+                    self.cube.index_count() as u32,
+                    2,
+                    0,
+                    0,
+                    2,
                 );
 
                 self.logical_device.cmd_end_render_pass(commandbuffer);
@@ -636,10 +656,10 @@ impl Drop for Vulkan {
                 .device_wait_idle()
                 .expect("something wrong while waiting");
 
-            self.atlas
+            self.instance_buffer
                 .cleanup(&mut self.allocator, &self.logical_device);
 
-            self.instance_buffer
+            self.texture_store
                 .cleanup(&mut self.allocator, &self.logical_device);
 
             self.cube.cleanup(&mut self.allocator, &self.logical_device);

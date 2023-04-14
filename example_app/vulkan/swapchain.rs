@@ -49,7 +49,7 @@ impl Swapchain {
         let extent = surface_capabilities.current_extent;
         let surface_present_modes = surface.get_present_modes(physical_device)?;
 
-        let queuefamilies = [queue_families.graphics_q_index.unwrap()];
+        let queuefamilies = [queue_families.graphics];
 
         let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
             .surface(surface.surface)

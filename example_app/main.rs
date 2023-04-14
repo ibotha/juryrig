@@ -1,5 +1,7 @@
 use log::{error, info};
+pub mod jr_image;
 mod vulkan;
+
 use winit::{
     event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent},
     event_loop::EventLoop,
@@ -21,6 +23,35 @@ fn main() {
         Ok(window) => {
             let cached_window_id = window.id().clone();
             let mut vulkan: Option<Vulkan> = None;
+
+            let mut atlas_image = image::io::Reader::open("MC_Atlas.png")
+                .expect("could not open image")
+                .decode()
+                .expect("could not decode image")
+                .flipv();
+            let atlas = jr_image::RGBAImage::new(atlas_image.width(), atlas_image.height());
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    atlas_image.as_rgba8().unwrap().as_ptr(),
+                    atlas.data.as_ptr() as *mut u8,
+                    (atlas.width * atlas.height * 4) as usize,
+                );
+            }
+            drop(atlas_image);
+
+            let mut other_image = image::io::Reader::open("MC_Atlas.png")
+                .expect("could not open image")
+                .decode()
+                .expect("could not decode image");
+            let other = jr_image::RGBAImage::new(other_image.width(), other_image.height());
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    other_image.as_rgba8().unwrap().as_ptr(),
+                    other.data.as_ptr() as *mut u8,
+                    (other.width * other.height * 4) as usize,
+                );
+            }
+            drop(other_image);
 
             event_loop.run(move |event, _, control_flow| {
                 control_flow.set_poll();
@@ -86,11 +117,19 @@ fn main() {
                             _ => {}
                         }
                     }
-
                     Event::Resumed => {
                         //TODO: Initialise graphics context
                         info!("Event-Startup");
-                        vulkan = Some(Vulkan::new(&window).expect("Could not init vulkan!"))
+                        vulkan = Some(Vulkan::new(&window).expect("Could not init vulkan!"));
+                        match &mut vulkan {
+                            Some(v) => {
+                                // let mesh_handle = v.register_mesh(vertex_data, index_data);
+                                let texture_handle = v.register_texture(&other);
+                                let texture_handle = v.register_texture(&atlas);
+                                //let model = Entity::new(mesh_handle, texture_handle);
+                            }
+                            _ => {}
+                        }
                     }
                     Event::LoopDestroyed => {
                         // TODO: Destroy everything here

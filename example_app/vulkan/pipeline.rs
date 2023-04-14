@@ -1,15 +1,19 @@
 use ash::vk::{
-    self, DescriptorSetLayoutBinding, PipelineDepthStencilStateCreateInfo, PushConstantRange,
+    self, DescriptorSetLayoutBinding, DescriptorSetVariableDescriptorCountAllocateInfo,
+    DescriptorSetVariableDescriptorCountAllocateInfoBuilder,
+    DescriptorSetVariableDescriptorCountAllocateInfoEXT, PipelineDepthStencilStateCreateInfo,
+    PushConstantRange,
 };
 
 use super::swapchain::Swapchain;
+const MAX_IMAGES: u32 = 2;
 
 pub(super) struct Pipeline {
     pub(super) pipeline: vk::Pipeline,
     pub(super) layout: vk::PipelineLayout,
     descriptor_pool: vk::DescriptorPool,
     pub(super) descriptor_sets: Vec<vk::DescriptorSet>,
-    descriptor_set_layouts: [vk::DescriptorSetLayout; 1],
+    descriptor_set_layout_texture: vk::DescriptorSetLayout,
 }
 
 impl Pipeline {
@@ -18,7 +22,7 @@ impl Pipeline {
             logical_device.destroy_pipeline(self.pipeline, None);
             logical_device.destroy_pipeline_layout(self.layout, None);
             logical_device.destroy_descriptor_pool(self.descriptor_pool, None);
-            logical_device.destroy_descriptor_set_layout(self.descriptor_set_layouts[0], None);
+            logical_device.destroy_descriptor_set_layout(self.descriptor_set_layout_texture, None);
         }
     }
 
@@ -77,20 +81,26 @@ impl Pipeline {
                 .format(vk::Format::R32G32B32A32_SFLOAT)
                 .build(),
             vk::VertexInputAttributeDescription::builder()
-                .binding(1)
+                .binding(0)
                 .location(4)
+                .offset(64)
+                .format(vk::Format::R32_UINT)
+                .build(),
+            vk::VertexInputAttributeDescription::builder()
+                .binding(1)
+                .location(5)
                 .offset(0)
                 .format(vk::Format::R32G32B32_SFLOAT)
                 .build(),
             vk::VertexInputAttributeDescription::builder()
                 .binding(1)
-                .location(5)
+                .location(6)
                 .offset(12)
                 .format(vk::Format::R32G32_SFLOAT)
                 .build(),
             vk::VertexInputAttributeDescription::builder()
                 .binding(1)
-                .location(6)
+                .location(7)
                 .offset(20)
                 .format(vk::Format::R32G32B32_SFLOAT)
                 .build(),
@@ -99,7 +109,7 @@ impl Pipeline {
         let vertex_binding_descs = [
             vk::VertexInputBindingDescription::builder()
                 .binding(0)
-                .stride(64)
+                .stride(68)
                 .input_rate(vk::VertexInputRate::INSTANCE)
                 .build(),
             vk::VertexInputBindingDescription::builder()
@@ -170,23 +180,29 @@ impl Pipeline {
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .build()];
 
+        let descriptor_binding_flags = [vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT];
+        let mut descriptorset_layout_binding_flags =
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::builder()
+                .binding_flags(&descriptor_binding_flags);
+
         let layout_bindings = [DescriptorSetLayoutBinding::builder()
             .stage_flags(vk::ShaderStageFlags::FRAGMENT)
             .binding(0)
-            .descriptor_count(1)
+            .descriptor_count(MAX_IMAGES)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .build()];
 
-        let descriptor_set_layout_info =
-            vk::DescriptorSetLayoutCreateInfo::builder().bindings(&layout_bindings);
+        let descriptor_set_layout_info = vk::DescriptorSetLayoutCreateInfo::builder()
+            .bindings(&layout_bindings)
+            .push_next(&mut descriptorset_layout_binding_flags);
 
-        let descriptor_set_layouts = [unsafe {
+        let descriptor_set_layout_texture = unsafe {
             logical_device.create_descriptor_set_layout(&descriptor_set_layout_info, None)
-        }?];
+        }?;
 
         let descriptor_pool_sizes = [vk::DescriptorPoolSize::builder()
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .descriptor_count(3)
+            .descriptor_count(MAX_IMAGES * 3 * 1024)
             .build()];
 
         let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
@@ -195,14 +211,20 @@ impl Pipeline {
 
         let descriptor_pool =
             unsafe { logical_device.create_descriptor_pool(&descriptor_pool_info, None) }?;
-        let a = vec![descriptor_set_layouts[0]; 3];
 
+        let desc_layouts_texture = vec![descriptor_set_layout_texture; 3];
+        // TODO: Move this into the texture code to allocate as needed.
+        let mut variable = DescriptorSetVariableDescriptorCountAllocateInfo::builder()
+            .descriptor_counts(&[2, 2, 2]);
         let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
-            .set_layouts(&a);
+            .set_layouts(&desc_layouts_texture)
+            .push_next(&mut variable);
 
         let descriptor_sets =
             unsafe { logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info) }?;
+
+        let descriptor_set_layouts = [descriptor_set_layout_texture];
 
         let pipelinelayout_info = vk::PipelineLayoutCreateInfo::builder()
             .push_constant_ranges(&push_constant_ranges)
@@ -234,7 +256,6 @@ impl Pipeline {
                 )
                 .expect("A problem with the pipeline creation")
         }[0];
-
         unsafe {
             logical_device.destroy_shader_module(fragmentshader_module, None);
             logical_device.destroy_shader_module(vertexshader_module, None);
@@ -244,7 +265,7 @@ impl Pipeline {
             layout: pipelinelayout,
             descriptor_pool,
             descriptor_sets,
-            descriptor_set_layouts,
+            descriptor_set_layout_texture,
         })
     }
 }

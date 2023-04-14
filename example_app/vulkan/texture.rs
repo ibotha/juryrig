@@ -1,7 +1,20 @@
-use ash::{vk, Device};
+use std::collections::HashMap;
+
+use ash::{
+    vk::{self, CommandPool},
+    Device,
+};
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator};
 
-use super::{buffer::Buffer, Pools, Queues};
+use crate::jr_image::{HDRImage, RGBAImage};
+
+use super::{
+    buffer::Buffer,
+    error::{InitError, RuntimeError},
+    Pools, Queues,
+};
+
+use uuid::Uuid;
 
 pub(super) struct Texture {
     pub(super) image: vk::Image,
@@ -102,13 +115,13 @@ impl Texture {
         })
     }
 
-    pub(super) fn upload(
+    pub(super) fn upload<T>(
         &mut self,
         allocator: &mut Allocator,
         logical_device: &Device,
-        raw: &Vec<u8>,
-        queues: &Queues,
-        pools: &Pools,
+        raw: &[T],
+        queue: vk::Queue,
+        pool: CommandPool,
     ) -> Result<(), vk::Result> {
         let mut buffer = Buffer::new(
             allocator,
@@ -123,8 +136,9 @@ impl Texture {
             Err(_) => panic!("Could not upload texture!"),
             Ok(_) => {}
         }
+
         let commandbuf_allocate_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(pools.commandpool_graphics)
+            .command_pool(pool)
             .command_buffer_count(1);
         let copycmdbuffer =
             unsafe { logical_device.allocate_command_buffers(&commandbuf_allocate_info) }.unwrap()
@@ -133,6 +147,7 @@ impl Texture {
         let cmdbegininfo = vk::CommandBufferBeginInfo::builder()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         unsafe { logical_device.begin_command_buffer(copycmdbuffer, &cmdbegininfo) }?;
+
         let barrier = vk::ImageMemoryBarrier::builder()
             .image(self.image)
             .src_access_mask(vk::AccessFlags::empty())
@@ -147,6 +162,7 @@ impl Texture {
                 layer_count: 1,
             })
             .build();
+
         unsafe {
             logical_device.cmd_pipeline_barrier(
                 copycmdbuffer,
@@ -218,21 +234,15 @@ impl Texture {
             .command_buffers(&[copycmdbuffer])
             .build()];
         let fence = unsafe { logical_device.create_fence(&vk::FenceCreateInfo::default(), None) }?;
-        unsafe { logical_device.queue_submit(queues.graphics, &submit_infos, fence) }?;
+        unsafe { logical_device.queue_submit(queue, &submit_infos, fence) }?;
         unsafe { logical_device.wait_for_fences(&[fence], true, std::u64::MAX) }?;
         unsafe { logical_device.destroy_fence(fence, None) };
         unsafe { buffer.cleanup(allocator, &logical_device) };
-        unsafe {
-            logical_device.free_command_buffers(pools.commandpool_graphics, &[copycmdbuffer])
-        };
+        unsafe { logical_device.free_command_buffers(pool, &[copycmdbuffer]) };
         Ok(())
     }
 
-    pub(super) unsafe fn cleanup(
-        &mut self,
-        allocator: &mut std::mem::ManuallyDrop<Allocator>,
-        logical_device: &Device,
-    ) {
+    pub(super) unsafe fn cleanup(&mut self, allocator: &mut Allocator, logical_device: &Device) {
         logical_device.destroy_sampler(self.sampler, None);
 
         logical_device.destroy_image_view(self.image_view, None);
@@ -240,5 +250,88 @@ impl Texture {
         logical_device.destroy_image(self.image, None);
 
         allocator.free(self.allocation.take().unwrap()).unwrap();
+    }
+}
+
+pub struct TextureHandle {
+    id: Uuid,
+}
+
+pub(super) struct TextureStore {
+    textures_map: HashMap<Uuid, u32>,
+    pub textures: Vec<Texture>,
+}
+
+impl TextureStore {
+    pub(super) fn new() -> Result<TextureStore, InitError> {
+        Ok(TextureStore {
+            textures_map: HashMap::new(),
+            textures: vec![],
+        })
+    }
+
+    // Allocates and registers an empty image
+    pub(super) fn create_empty_texture(&mut self, width: u32, height: u32) {
+        todo!()
+    }
+
+    // Allocates and registers an empty image
+    pub(super) fn register_texture(
+        &mut self,
+        allocator: &mut Allocator,
+        logical_device: &Device,
+        image: &RGBAImage,
+        queues: &[u32],
+        transfer_queue: vk::Queue,
+        transfer_cmd_pool: vk::CommandPool,
+    ) -> Result<TextureHandle, RuntimeError> {
+        static mut a: u32 = 0;
+        unsafe { a = a + 1 };
+        let id = Uuid::new_v4();
+        let mut texture = Texture::new(
+            allocator,
+            logical_device,
+            image.width,
+            image.height,
+            format!("t-{}", &id).as_str(),
+            queues,
+        )?;
+        texture.upload(
+            allocator,
+            logical_device,
+            &image.data,
+            transfer_queue,
+            transfer_cmd_pool,
+        )?;
+        self.textures.push(texture);
+        self.textures_map
+            .insert(id, (self.textures.len() - 1) as u32);
+        Ok(TextureHandle { id })
+    }
+
+    // Allocates and registers an empty image
+    pub(super) fn register_hdr_texture(&mut self, image: HDRImage) {
+        todo!()
+    }
+
+    pub(super) fn cleanup(&mut self, allocator: &mut Allocator, logical_device: &Device) {
+        for t in &mut self.textures {
+            unsafe {
+                t.cleanup(allocator, logical_device);
+            }
+        }
+    }
+
+    pub(crate) fn get_descriptor_image_info(&self) -> Vec<vk::DescriptorImageInfo> {
+        self.textures
+            .iter()
+            .map(|texture| {
+                vk::DescriptorImageInfo::builder()
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_view(texture.image_view)
+                    .sampler(texture.sampler)
+                    .build()
+            })
+            .collect()
     }
 }

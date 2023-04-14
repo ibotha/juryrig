@@ -1,12 +1,10 @@
-use std::mem::size_of;
-
 use ash::{
     vk::{self, CommandBuffer},
     Device,
 };
 use gpu_allocator::vulkan::Allocator;
 
-use super::{buffer::Buffer, error::VulkanError, VertexBufferBindings};
+use super::{buffer::Buffer, VertexBufferBindings};
 
 #[repr(C)]
 pub struct ShaderVertexData {
@@ -27,7 +25,7 @@ impl StaticMesh {
         logical_device: &Device,
         index_data: &[u32],
         vertex_data: &[ShaderVertexData],
-    ) -> Result<StaticMesh, VulkanError> {
+    ) -> Result<StaticMesh, vk::Result> {
         let mut index_buffer = Buffer::<u32>::new(
             allocator,
             logical_device,
