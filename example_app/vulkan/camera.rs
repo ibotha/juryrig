@@ -2,12 +2,12 @@ use super::buffer::Buffer;
 
 pub struct Camera {
     pub(super) viewmatrix: na::Matrix4<f32>,
-    position: na::Vector3<f32>,
+    pub(super) position: na::Vector3<f32>,
     view_direction: na::Unit<na::Vector3<f32>>,
     down_direction: na::Unit<na::Vector3<f32>>,
 
     fovy: f32,
-    aspect: f32,
+    pub(super) aspect: f32,
     near: f32,
     far: f32,
     pub(super) projectionmatrix: na::Matrix4<f32>,
@@ -31,11 +31,7 @@ impl Default for Camera {
     }
 }
 impl Camera {
-    fn update_buffer(&self, buffer: &mut Buffer<[[f32; 4]; 4]>) {
-        let data: [[f32; 4]; 4] = self.viewmatrix.into();
-        buffer.copy(&vec![data]);
-    }
-    fn update_viewmatrix(&mut self) {
+    pub fn update_viewmatrix(&mut self) {
         let right = na::Unit::new_normalize(self.down_direction.cross(&self.view_direction));
         let m = na::Matrix4::new(
             right.x,
@@ -57,7 +53,7 @@ impl Camera {
         );
         self.viewmatrix = m;
     }
-    fn update_projectionmatrix(&mut self) {
+    pub fn update_projectionmatrix(&mut self) {
         let d = 1.0 / (0.5 * self.fovy).tan();
         self.projectionmatrix = na::Matrix4::new(
             d / self.aspect,

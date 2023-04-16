@@ -65,6 +65,19 @@ fn main() {
                         }
                     }
                     Event::WindowEvent {
+                        window_id,
+                        event: WindowEvent::Resized(size),
+                    } => {
+                        if cached_window_id == window_id {
+                            match &mut vulkan {
+                                Some(v) => {
+                                    v.resize_surface(size.width, size.height);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Event::WindowEvent {
                         event: WindowEvent::KeyboardInput { input, .. },
                         ..
                     } => {

@@ -5,7 +5,7 @@ use ash::vk::{
     PushConstantRange,
 };
 
-use super::swapchain::Swapchain;
+use super::{error::RuntimeError, swapchain::Swapchain};
 const MAX_IMAGES: u32 = 2;
 
 pub(super) struct Pipeline {
@@ -31,29 +31,29 @@ impl Pipeline {
         swapchain: &Swapchain,
         renderpass: &vk::RenderPass,
     ) -> Result<Pipeline, vk::Result> {
-        let vertexshader_createinfo = vk::ShaderModuleCreateInfo::builder().code(
+        let vertex_shader_create_info = vk::ShaderModuleCreateInfo::builder().code(
             vk_shader_macros::include_glsl!("./shaders/vertex.glsl", kind: vert),
         );
-        let vertexshader_module =
-            unsafe { logical_device.create_shader_module(&vertexshader_createinfo, None)? };
+        let vertex_shader_module =
+            unsafe { logical_device.create_shader_module(&vertex_shader_create_info, None)? };
 
-        let fragmentshader_createinfo = vk::ShaderModuleCreateInfo::builder().code(
+        let fragment_shader_create_info = vk::ShaderModuleCreateInfo::builder().code(
             vk_shader_macros::include_glsl!("./shaders/fragment.glsl", kind: frag),
         );
-        let fragmentshader_module =
-            unsafe { logical_device.create_shader_module(&fragmentshader_createinfo, None)? };
+        let fragment_shader_module =
+            unsafe { logical_device.create_shader_module(&fragment_shader_create_info, None)? };
 
-        let mainfunctionname = std::ffi::CString::new("main").unwrap();
+        let main_function_name = std::ffi::CString::new("main").unwrap();
 
-        let vertexshader_stage = vk::PipelineShaderStageCreateInfo::builder()
+        let vertex_shader_stage = vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vertexshader_module)
-            .name(&mainfunctionname);
-        let fragmentshader_stage = vk::PipelineShaderStageCreateInfo::builder()
+            .module(vertex_shader_module)
+            .name(&main_function_name);
+        let fragment_shader_stage = vk::PipelineShaderStageCreateInfo::builder()
             .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(fragmentshader_module)
-            .name(&mainfunctionname);
-        let shader_stages = vec![vertexshader_stage.build(), fragmentshader_stage.build()];
+            .module(fragment_shader_module)
+            .name(&main_function_name);
+        let shader_stages = vec![vertex_shader_stage.build(), fragment_shader_stage.build()];
 
         let vertex_attrib_descs = [
             vk::VertexInputAttributeDescription::builder()
@@ -257,8 +257,8 @@ impl Pipeline {
                 .expect("A problem with the pipeline creation")
         }[0];
         unsafe {
-            logical_device.destroy_shader_module(fragmentshader_module, None);
-            logical_device.destroy_shader_module(vertexshader_module, None);
+            logical_device.destroy_shader_module(fragment_shader_module, None);
+            logical_device.destroy_shader_module(vertex_shader_module, None);
         }
         Ok(Pipeline {
             pipeline: graphicspipeline,

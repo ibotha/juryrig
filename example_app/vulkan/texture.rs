@@ -21,7 +21,6 @@ pub(super) struct Texture {
     pub width: u32,
     pub height: u32,
     pub(super) image_view: vk::ImageView,
-    pub(super) sampler: vk::Sampler,
     allocation: Option<Allocation>,
 }
 
@@ -86,31 +85,11 @@ impl Texture {
 
         let image_view = unsafe { logical_device.create_image_view(&view_create_info, None) }?;
 
-        let sampler_info = vk::SamplerCreateInfo::builder()
-            .mag_filter(vk::Filter::LINEAR)
-            .min_filter(vk::Filter::LINEAR)
-            .address_mode_u(vk::SamplerAddressMode::REPEAT)
-            .address_mode_v(vk::SamplerAddressMode::REPEAT)
-            .address_mode_w(vk::SamplerAddressMode::REPEAT)
-            .anisotropy_enable(true)
-            .max_anisotropy(16.0)
-            .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
-            .unnormalized_coordinates(false)
-            .compare_enable(false)
-            .compare_op(vk::CompareOp::ALWAYS)
-            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
-            .mip_lod_bias(0.0)
-            .min_lod(0.0)
-            .max_lod(0.0);
-
-        let sampler = unsafe { logical_device.create_sampler(&sampler_info, None) }?;
-
         Ok(Texture {
             image,
             width,
             height,
             image_view,
-            sampler,
             allocation: Some(allocation),
         })
     }
@@ -243,8 +222,6 @@ impl Texture {
     }
 
     pub(super) unsafe fn cleanup(&mut self, allocator: &mut Allocator, logical_device: &Device) {
-        logical_device.destroy_sampler(self.sampler, None);
-
         logical_device.destroy_image_view(self.image_view, None);
 
         logical_device.destroy_image(self.image, None);
@@ -259,14 +236,34 @@ pub struct TextureHandle {
 
 pub(super) struct TextureStore {
     textures_map: HashMap<Uuid, u32>,
+    sampler: vk::Sampler,
     pub textures: Vec<Texture>,
 }
 
 impl TextureStore {
-    pub(super) fn new() -> Result<TextureStore, InitError> {
+    pub(super) fn new(logical_device: &Device) -> Result<TextureStore, InitError> {
+        let sampler_info = vk::SamplerCreateInfo::builder()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::REPEAT)
+            .address_mode_v(vk::SamplerAddressMode::REPEAT)
+            .address_mode_w(vk::SamplerAddressMode::REPEAT)
+            .anisotropy_enable(true)
+            .max_anisotropy(16.0)
+            .border_color(vk::BorderColor::INT_OPAQUE_BLACK)
+            .unnormalized_coordinates(false)
+            .compare_enable(false)
+            .compare_op(vk::CompareOp::ALWAYS)
+            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+            .mip_lod_bias(0.0)
+            .min_lod(0.0)
+            .max_lod(0.0);
+
+        let sampler = unsafe { logical_device.create_sampler(&sampler_info, None) }?;
         Ok(TextureStore {
             textures_map: HashMap::new(),
             textures: vec![],
+            sampler,
         })
     }
 
@@ -315,6 +312,10 @@ impl TextureStore {
     }
 
     pub(super) fn cleanup(&mut self, allocator: &mut Allocator, logical_device: &Device) {
+        unsafe {
+            logical_device.destroy_sampler(self.sampler, None);
+        }
+
         for t in &mut self.textures {
             unsafe {
                 t.cleanup(allocator, logical_device);
@@ -329,7 +330,7 @@ impl TextureStore {
                 vk::DescriptorImageInfo::builder()
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image_view(texture.image_view)
-                    .sampler(texture.sampler)
+                    .sampler(self.sampler)
                     .build()
             })
             .collect()

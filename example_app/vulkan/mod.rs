@@ -14,7 +14,7 @@ use self::{
     error::{InitError, RuntimeError},
     initialisation::{
         create_instance, init_device_and_queues, init_physical_device_and_properties,
-        QueueFamilies, Queues,
+        init_renderpass, QueueFamilies, Queues,
     },
     mesh::ShaderVertexData,
     surface::Surface,
@@ -49,6 +49,22 @@ enum VertexBufferBindings {
 pub struct InstanceData {
     pub model: [[f32; 4]; 4],
     pub texture_index: u32,
+}
+
+#[derive(Copy, Clone)]
+#[repr(C)]
+pub enum LightType {
+    Directional = 0,
+    Point = 1,
+    Spot = 2,
+}
+
+#[repr(C)]
+pub struct LightData {
+    pub type_: LightType,
+    pub position: [f32; 4],
+    pub color: [f32; 4],
+    pub intensity: f32,
 }
 
 struct Pools {
@@ -103,6 +119,7 @@ pub struct Vulkan {
     entry: Entry,
     debug: std::mem::ManuallyDrop<Debug>,
     surface: std::mem::ManuallyDrop<Surface>,
+    physical_device: vk::PhysicalDevice,
     queue_families: QueueFamilies,
     logical_device: Device,
     queues: Queues,
@@ -116,6 +133,8 @@ pub struct Vulkan {
     pub camera: Camera,
     cube: StaticMesh,
     texture_store: TextureStore,
+    surface_format: vk::SurfaceFormatKHR,
+    halt_render: bool,
 }
 
 impl Vulkan {
@@ -162,7 +181,7 @@ impl Vulkan {
             surface_format,
         )?;
 
-        let renderpass = Self::init_renderpass(&logical_device, surface_format)?;
+        let renderpass = init_renderpass(&logical_device, surface_format)?;
 
         swapchain.create_framebuffers(&logical_device, renderpass)?;
 
@@ -213,32 +232,32 @@ impl Vulkan {
             ShaderVertexData {
                 position: Vector3::new(1.000000, 1.000000, 1.000000),
                 uv: Vector2::new(0.312471, 0.733295),
-                normal: Vector3::new(-1.0000, -0.0000, -0.0000),
+                normal: Vector3::new(-0.0000, -0.0000, 1.0000),
             },
             ShaderVertexData {
                 position: Vector3::new(-1.000000, -1.000000, 1.000000),
                 uv: Vector2::new(0.281288, 0.666747),
-                normal: Vector3::new(-1.0000, -0.0000, -0.0000),
+                normal: Vector3::new(-0.0000, -0.0000, 1.0000),
             },
             ShaderVertexData {
                 position: Vector3::new(1.000000, -1.000000, 1.000000),
                 uv: Vector2::new(0.312494, 0.666682),
-                normal: Vector3::new(-1.0000, -0.0000, -0.0000),
+                normal: Vector3::new(-0.0000, -0.0000, 1.0000),
             },
             ShaderVertexData {
                 position: Vector3::new(-1.000000, 1.000000, 1.000000),
                 uv: Vector2::new(0.406424, 0.733344),
-                normal: Vector3::new(-0.0000, -1.0000, -0.0000),
+                normal: Vector3::new(-1.0000, -0.0000, -0.0000),
             },
             ShaderVertexData {
                 position: Vector3::new(-1.000000, -1.000000, -1.000000),
                 uv: Vector2::new(0.375017, 0.666931),
-                normal: Vector3::new(-0.0000, -1.0000, -0.0000),
+                normal: Vector3::new(-1.0000, -0.0000, -0.0000),
             },
             ShaderVertexData {
                 position: Vector3::new(-1.000000, -1.000000, 1.000000),
                 uv: Vector2::new(0.406197, 0.667131),
-                normal: Vector3::new(-0.0000, -1.0000, -0.0000),
+                normal: Vector3::new(-1.0000, -0.0000, -0.0000),
             },
             ShaderVertexData {
                 position: Vector3::new(1.000000, -1.000000, -1.000000),
@@ -303,32 +322,32 @@ impl Vulkan {
             ShaderVertexData {
                 position: Vector3::new(1.000000, 1.000000, 1.000000),
                 uv: Vector2::new(0.312471, 0.733295),
-                normal: Vector3::new(-1.0000, -0.0000, -0.0000),
+                normal: Vector3::new(0.0000, -0.0000, 1.0000),
             },
             ShaderVertexData {
                 position: Vector3::new(-1.000000, 1.000000, 1.000000),
                 uv: Vector2::new(0.281267, 0.733332),
-                normal: Vector3::new(-1.0000, -0.0000, -0.0000),
+                normal: Vector3::new(0.0000, -0.0000, 1.0000),
             },
             ShaderVertexData {
                 position: Vector3::new(-1.000000, -1.000000, 1.000000),
                 uv: Vector2::new(0.281288, 0.666747),
-                normal: Vector3::new(-1.0000, -0.0000, -0.0000),
+                normal: Vector3::new(0.0000, -0.0000, 1.0000),
             },
             ShaderVertexData {
                 position: Vector3::new(-1.000000, 1.000000, 1.000000),
                 uv: Vector2::new(0.406424, 0.733344),
-                normal: Vector3::new(-0.0000, -1.0000, -0.0000),
+                normal: Vector3::new(-1.0000, -0.0000, -0.0000),
             },
             ShaderVertexData {
                 position: Vector3::new(-1.000000, 1.000000, -1.000000),
                 uv: Vector2::new(0.375060, 0.733192),
-                normal: Vector3::new(-0.0000, -1.0000, -0.0000),
+                normal: Vector3::new(-1.0000, -0.0000, -0.0000),
             },
             ShaderVertexData {
                 position: Vector3::new(-1.000000, -1.000000, -1.000000),
                 uv: Vector2::new(0.375017, 0.666931),
-                normal: Vector3::new(-0.0000, -1.0000, -0.0000),
+                normal: Vector3::new(-1.0000, -0.0000, -0.0000),
             },
             ShaderVertexData {
                 position: Vector3::new(1.000000, -1.000000, -1.000000),
@@ -378,12 +397,14 @@ impl Vulkan {
         ];
 
         let cube = StaticMesh::new(&mut allocator, &logical_device, &index_data, &vertex_data)?;
-        let texture_store = TextureStore::new()?;
+        let texture_store = TextureStore::new(&logical_device)?;
         Ok(Self {
             instance,
             entry,
             debug: std::mem::ManuallyDrop::new(debug),
             surface: std::mem::ManuallyDrop::new(surface),
+            surface_format,
+            physical_device,
             queue_families,
             logical_device,
             queues,
@@ -397,6 +418,7 @@ impl Vulkan {
             cube,
             camera: my_camera,
             texture_store,
+            halt_render: false,
         })
     }
 
@@ -411,60 +433,35 @@ impl Vulkan {
         )
     }
 
-    fn init_renderpass(
-        logical_device: &ash::Device,
-        format: vk::SurfaceFormatKHR,
-    ) -> Result<vk::RenderPass, vk::Result> {
-        let attachments = [
-            vk::AttachmentDescription::builder()
-                .format(format.format)
-                .load_op(vk::AttachmentLoadOp::CLEAR)
-                .store_op(vk::AttachmentStoreOp::STORE)
-                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-                .initial_layout(vk::ImageLayout::UNDEFINED)
-                .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .build(),
-            vk::AttachmentDescription::builder()
-                .format(vk::Format::D32_SFLOAT)
-                .load_op(vk::AttachmentLoadOp::CLEAR)
-                .store_op(vk::AttachmentStoreOp::DONT_CARE)
-                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-                .initial_layout(vk::ImageLayout::UNDEFINED)
-                .final_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .build(),
-        ];
-        let color_attachment_references = [vk::AttachmentReference {
-            attachment: 0,
-            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-        }];
-        let depth_attachment_reference = vk::AttachmentReference {
-            attachment: 1,
-            layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        };
-        let subpasses = [vk::SubpassDescription::builder()
-            .color_attachments(&color_attachment_references)
-            .depth_stencil_attachment(&depth_attachment_reference)
-            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-            .build()];
-        let subpass_dependencies = [vk::SubpassDependency::builder()
-            .src_subpass(vk::SUBPASS_EXTERNAL)
-            .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-            .dst_subpass(0)
-            .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-            .dst_access_mask(
-                vk::AccessFlags::COLOR_ATTACHMENT_READ | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-            )
-            .build()];
-        let renderpass_info = vk::RenderPassCreateInfo::builder()
-            .attachments(&attachments)
-            .subpasses(&subpasses)
-            .dependencies(&subpass_dependencies);
-        let renderpass = unsafe { logical_device.create_render_pass(&renderpass_info, None)? };
-        Ok(renderpass)
+    pub fn resize_surface(&mut self, w: u32, h: u32) -> Result<(), RuntimeError> {
+        // Todo: Resize the render surface using the new width and height rather than inferring it from the surface itself
+        self.halt_render = true;
+        unsafe {
+            self.logical_device
+                .device_wait_idle()
+                .expect("something wrong while waiting");
+            self.swapchain
+                .cleanup(&self.logical_device, &mut self.allocator);
+            self.swapchain = Swapchain::init(
+                &self.instance,
+                self.physical_device,
+                &self.logical_device,
+                &mut self.allocator,
+                &self.surface,
+                &self.queue_families,
+                self.surface_format,
+            )?;
+            self.swapchain
+                .create_framebuffers(&self.logical_device, self.renderpass)?;
+            self.graphics_pipeline.cleanup(&self.logical_device);
+            self.graphics_pipeline =
+                Pipeline::init(&self.logical_device, &self.swapchain, &self.renderpass)?;
+        }
+        self.camera.aspect = (w as f32) / (h as f32);
+        self.camera.update_projectionmatrix();
+        self.halt_render = false;
+
+        Ok(())
     }
 
     fn create_commandbuffers(
@@ -479,6 +476,9 @@ impl Vulkan {
     }
 
     pub(crate) fn swap_framebuffers(&mut self) -> Result<(), vk::Result> {
+        if self.halt_render {
+            return Ok(());
+        }
         let frame_buffer_info = self
             .swapchain
             .get_next_framebuffer(&self.logical_device, self.queues.graphics)?;
@@ -511,7 +511,7 @@ impl Vulkan {
             let instance_data = [
                 InstanceData {
                     model: (na::Matrix4::new_translation(&na::Vector3::new(0f32, 0f32, 0f32))
-                        * na::Matrix4::from_euler_angles(a, 0f32, 0f32))
+                        * na::Matrix4::from_euler_angles(0f32, 0f32, 0f32))
                     .into(),
                     texture_index: 0,
                 },
@@ -605,20 +605,20 @@ impl Vulkan {
                 self.logical_device.cmd_draw_indexed(
                     commandbuffer,
                     self.cube.index_count() as u32,
-                    2,
+                    4,
                     0,
                     0,
                     0,
                 );
 
-                self.logical_device.cmd_draw_indexed(
-                    commandbuffer,
-                    self.cube.index_count() as u32,
-                    2,
-                    0,
-                    0,
-                    2,
-                );
+                // self.logical_device.cmd_draw_indexed(
+                //     commandbuffer,
+                //     self.cube.index_count() as u32,
+                //     2,
+                //     0,
+                //     0,
+                //     2,
+                // );
 
                 self.logical_device.cmd_end_render_pass(commandbuffer);
                 self.logical_device.end_command_buffer(commandbuffer)?;
@@ -667,8 +667,10 @@ impl Drop for Vulkan {
             self.command_buffer_pools.cleanup(&self.logical_device);
 
             self.graphics_pipeline.cleanup(&self.logical_device);
+
             self.logical_device
                 .destroy_render_pass(self.renderpass, None);
+
             self.swapchain
                 .cleanup(&self.logical_device, &mut self.allocator);
             std::mem::ManuallyDrop::drop(&mut self.allocator);

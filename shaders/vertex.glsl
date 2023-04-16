@@ -11,10 +11,12 @@ layout(location=6)in vec2 uv;
 layout(location=7)in vec3 normal;
 
 layout(location=0)out vec2 uv_for_fragment_shader;
-layout(location=1)out uint tex_id_for_fragment_shader;
+layout(location=1)out vec3 normal_for_fragment_shader;
+layout(location=2)out uint tex_id_for_fragment_shader;
 
 void main(){
     gl_Position=PushConstants.proj*model*vec4(position,1);
     tex_id_for_fragment_shader = tex_id;
     uv_for_fragment_shader=uv;
+    normal_for_fragment_shader=normalize(mat3(model)*normal);
 }
